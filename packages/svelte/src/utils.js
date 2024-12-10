@@ -138,7 +138,7 @@ const DELEGATED_EVENTS = [
  * @param {string} event_name
  */
 export function is_delegated(event_name) {
-	return DELEGATED_EVENTS.includes(event_name);
+	return DELEGATED_EVENTS.includes(event_name.toLowerCase());
 }
 
 /**

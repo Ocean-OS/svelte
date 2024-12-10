@@ -12,7 +12,7 @@ import * as b from '../../../../../utils/builders.js';
 export function visit_event_attribute(node, context) {
 	let capture = false;
 
-	let event_name = node.name.slice(2);
+	let event_name = node.name.slice(2).toLowerCase();
 	if (is_capture_event(event_name)) {
 		event_name = event_name.slice(0, -7);
 		capture = true;

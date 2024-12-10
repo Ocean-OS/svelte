@@ -77,7 +77,7 @@ export function get_attribute_chunks(value) {
  * @returns {attribute is AST.Attribute & { value: [AST.ExpressionTag] | AST.ExpressionTag }}
  */
 export function is_event_attribute(attribute) {
-	return is_expression_attribute(attribute) && attribute.name.startsWith('on');
+	return is_expression_attribute(attribute) && attribute.name.toLowerCase().startsWith('on');
 }
 
 /**
