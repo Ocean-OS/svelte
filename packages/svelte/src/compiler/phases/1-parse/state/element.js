@@ -13,6 +13,7 @@ import { create_attribute, create_expression_metadata } from '../../nodes.js';
 import { get_attribute_expression, is_expression_attribute } from '../../../utils/ast.js';
 import { closing_tag_omitted } from '../../../../html-tree-validation.js';
 import { list } from '../../../utils/string.js';
+import { is_event_attribute } from '../../../utils/ast.js';
 
 const regex_invalid_unquoted_attribute_value = /^(\/>|[\s"'=<>`])/;
 const regex_closing_textarea_tag = /^<\/textarea(\s[^>]*)?>/i;
@@ -181,6 +182,8 @@ export default function element(parser) {
 
 	/** @type {string[]} */
 	const unique_names = [];
+	/**@type {string[]} */
+	const unique_events = [];
 
 	const current = parser.current();
 	const is_top_level_script_or_style =
@@ -203,11 +206,15 @@ export default function element(parser) {
 			// `style:attribute` and `attribute` are different and should be allowed together
 			// so we concatenate the type while normalizing the type for BindDirective
 			const type = attribute.type === 'BindDirective' ? 'Attribute' : attribute.type;
-			if (unique_names.includes(type + attribute.name)) {
+			let is_event = attribute.type === 'Attribute' && is_event_attribute(attribute) && parent.type === "RegularElement";
+			if (unique_names.includes(type + attribute.name) || (is_event && unique_events.includes(attribute.name.toLowerCase()))) {
 				e.attribute_duplicate(attribute);
 				// <svelte:element bind:this this=..> is allowed
 			} else if (attribute.name !== 'this') {
 				unique_names.push(type + attribute.name);
+				if (is_event) {
+					unique_events.push(attribute.name.toLowerCase());
+				}
 			}
 		}
 
