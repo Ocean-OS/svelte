@@ -810,6 +810,12 @@ Cannot export state from a module if it is reassigned. Either export a function 
 `%rune%(...)` can only be used as a variable declaration initializer or a class field
 ```
 
+### state_ref_invalid_argument
+
+```
+`$state.ref` can only be called with a single `$state` variable as its argument
+```
+
 ### store_invalid_scoped_subscription
 
 ```

@@ -212,6 +212,10 @@ It's possible to export a snippet from a `<script module>` block, but only if it
 
 > `%rune%(...)` can only be used as a variable declaration initializer or a class field
 
+## state_ref_invalid_argument
+
+> `$state.ref` can only be called with a single `$state` variable as its argument
+
 ## store_invalid_scoped_subscription
 
 > Cannot subscribe to stores that are not declared at the top level of the component

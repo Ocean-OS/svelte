@@ -185,6 +185,24 @@ export function CallExpression(node, context) {
 			}
 
 			break;
+
+		case '$state.ref':
+			if (node.arguments.length !== 1) {
+				e.rune_invalid_arguments_length(node, rune, 'exactly one argument');
+			}
+			if (node.arguments[0].type === 'Identifier') {
+				const binding = context.state.scope.get(node.arguments[0].name);
+				if (!binding) {
+					e.state_ref_invalid_argument(node);
+				}
+				const valid_bindings = ['state', 'raw_state', 'derived'];
+				if (!valid_bindings.includes(binding.kind)) {
+					e.state_ref_invalid_argument(node);
+				}
+			} else {
+				e.state_ref_invalid_argument(node);
+			}
+			break;
 	}
 
 	if (node.callee.type === 'Identifier') {

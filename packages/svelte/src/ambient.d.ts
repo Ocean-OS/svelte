@@ -98,7 +98,7 @@ declare namespace $state {
 	 * you must reassign it.
 	 *
 	 * Example:
-	 * ```ts
+	 * ```svelte
 	 * <script>
 	 *   let items = $state.raw([0]);
 	 *
@@ -118,11 +118,30 @@ declare namespace $state {
 	 */
 	export function raw<T>(initial: T): T;
 	export function raw<T>(): T | undefined;
+
+	/**
+	 * Converts a reactive `$state`, `$derived`, or `$state.raw` variable into an object with a `value` accessor to pass to functions and external libraries. 
+	 * If the variable passed is a `$derived`, the accessor will be read-only. 
+	 * 
+	 * Example: 
+	 * ```ts
+	 * 	let counter = $state(0);
+	 * 	function timer(ref) {
+	 * 	  setInterval(() => {
+	 *       ref.value++;
+	 *    }, 1000);
+	 * 	}
+	 *  timer($state.ref(counter));
+	 * ```
+	 */
+	export function ref<T>(state: T): {
+		value: T
+	};
 	/**
 	 * To take a static snapshot of a deeply reactive `$state` proxy, use `$state.snapshot`:
 	 *
 	 * Example:
-	 * ```ts
+	 * ```svelte
 	 * <script>
 	 *   let counter = $state({ count: 0 });
 	 *
