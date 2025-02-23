@@ -405,6 +405,20 @@ export function stmt(expression) {
 }
 
 /**
+ * @param {ESTree.Expression | string} callee 
+ * @param {ESTree.TemplateLiteral} expression
+ * @returns {ESTree.TaggedTemplateExpression}
+ */
+export function tagged(callee, expression) {
+	if (typeof callee === 'string') callee = id(callee);
+	return {
+		type: 'TaggedTemplateExpression',
+		tag: callee,
+		quasi: expression
+	}
+}
+
+/**
  * @param {ESTree.TemplateElement[]} elements
  * @param {ESTree.Expression[]} expressions
  * @returns {ESTree.TemplateLiteral}

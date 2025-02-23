@@ -183,7 +183,7 @@ export function Fragment(node, context) {
 	body.push(...state.init);
 
 	if (state.update.length > 0) {
-		body.push(build_render_statement(state));
+		body.push(...build_render_statement(state));
 	}
 
 	body.push(...state.after_update);

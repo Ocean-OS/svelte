@@ -67,6 +67,8 @@ export type Equals = (this: Value, value: unknown) => boolean;
 
 export type TemplateNode = Text | Element | Comment;
 
+export type Expression = (strings: TemplateStringsArray, ...args: any) => () => string;
+
 export type Dom = TemplateNode | TemplateNode[];
 
 export type EachState = {

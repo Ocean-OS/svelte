@@ -1,4 +1,4 @@
-/** @import { Expression, ExpressionStatement, Identifier, MemberExpression, SequenceExpression, Statement, Super } from 'estree' */
+/** @import { Expression, ExpressionStatement, Identifier, MemberExpression, SequenceExpression, Statement, Super, CallExpression, ArrowFunctionExpression } from 'estree' */
 /** @import { AST, ExpressionMetadata } from '#compiler' */
 /** @import { ComponentClientTransformState } from '../../types' */
 import { walk } from 'zimmerframe';
@@ -80,7 +80,7 @@ function compare_expressions(a, b) {
  * @param {(node: AST.SvelteNode, state: any) => any} visit
  * @param {ComponentClientTransformState} state
  * @param {(value: Expression, metadata: ExpressionMetadata) => Expression} memoize
- * @returns {{ value: Expression, has_state: boolean }}
+ * @returns {{ value: Expression, has_state: boolean, tagged: CallExpression }}
  */
 export function build_template_chunk(
 	values,
@@ -88,11 +88,17 @@ export function build_template_chunk(
 	state,
 	memoize = (value, metadata) => (metadata.has_call ? get_expression_id(state, value) : value)
 ) {
+	let id = typeof memoize === 'object' ? memoize : undefined;
+	if (id) {
+		memoize = (value, metadata) => (metadata.has_call ? get_expression_id(state, value) : value);
+	}
 	/** @type {Expression[]} */
 	const expressions = [];
-
 	let quasi = b.quasi('');
 	const quasis = [quasi];
+	/** @type {ArrowFunctionExpression[]} */
+	let arrow_expressions = [];
+	let tagged = b.call('$.text_effect', id, b.arrow([b.id('$$expression')], b.tagged('$$expression', b.template(quasis, arrow_expressions))));
 
 	let has_state = false;
 
@@ -116,7 +122,7 @@ export function build_template_chunk(
 			if (values.length === 1) {
 				// If we have a single expression, then pass that in directly to possibly avoid doing
 				// extra work in the template_effect (instead we do the work in set_text).
-				return { value, has_state };
+				return { value, has_state, tagged };
 			} else {
 				// add `?? ''` where necessary (TODO optimise more cases)
 				if (
@@ -140,6 +146,7 @@ export function build_template_chunk(
 				}
 
 				expressions.push(value);
+				arrow_expressions.push(b.arrow([], value));
 			}
 
 			quasi = b.quasi('', i + 1 === values.length);
@@ -153,27 +160,29 @@ export function build_template_chunk(
 
 	const value = b.template(quasis, expressions);
 
-	return { value, has_state };
+	return { value, has_state, tagged };
 }
 
 /**
  * @param {ComponentClientTransformState} state
  */
 export function build_render_statement(state) {
-	return b.stmt(
-		b.call(
+	//@ts-ignore
+	let non_template_effects = state.update?.filter(update => update?.is_update);
+	//@ts-ignore
+	let template_effects = state.update?.filter(e => !e?.is_update);
+	return template_effects.length ? [b.stmt(b.call(
 			'$.template_effect',
 			b.arrow(
 				state.expressions.map((_, i) => b.id(`$${i}`)),
-				state.update.length === 1 && state.update[0].type === 'ExpressionStatement'
-					? state.update[0].expression
-					: b.block(state.update)
+				template_effects.length === 1 && template_effects[0].type === 'ExpressionStatement'
+					? template_effects[0].expression
+					: b.block(template_effects)
 			),
 			state.expressions.length > 0 &&
 				b.array(state.expressions.map((expression) => b.thunk(expression))),
 			state.expressions.length > 0 && !state.analysis.runes && b.id('$.derived_safe_equal')
-		)
-	);
+		)), ...non_template_effects] : non_template_effects;
 }
 
 /**

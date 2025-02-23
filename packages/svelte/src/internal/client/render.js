@@ -1,4 +1,4 @@
-/** @import { ComponentContext, Effect, TemplateNode } from '#client' */
+/** @import { ComponentContext, Effect, TemplateNode, Expression } from '#client' */
 /** @import { Component, ComponentType, SvelteComponent, MountOptions } from '../../index.js' */
 import { DEV } from 'esm-env';
 import {
@@ -11,7 +11,9 @@ import {
 import { HYDRATION_END, HYDRATION_ERROR, HYDRATION_START } from '../../constants.js';
 import { active_effect } from './runtime.js';
 import { push, pop, component_context } from './context.js';
-import { component_root, branch } from './reactivity/effects.js';
+import { component_root, branch, template_effect } from './reactivity/effects.js';
+import { source, set } from './reactivity/sources.js';
+import { get } from './runtime.js';
 import {
 	hydrate_next,
 	hydrate_node,
@@ -57,6 +59,56 @@ export function set_text(text, value) {
 		text.__t = str;
 		text.nodeValue = str + '';
 	}
+}
+
+/**
+ * @param {Element} node
+ * @param {(expression: Expression) => () => any[]} fn 
+ */
+export function text_effect(node, fn) {
+	/**
+	 * 
+	 * @param {TemplateStringsArray} strings 
+	 * @param  {...any} args 
+	 * @returns 
+	 */
+	function expression(strings, ...args) {
+		let static_nodes = strings.map(str => ({
+			text:() => str
+		}));
+		let nodes = [];
+		let next = static_nodes[0];
+		for (let arg of args) {
+			nodes.push(next);
+			next = static_nodes[static_nodes.indexOf(next) + 1];
+			let txt = {};
+			let a = arg();
+			if (a instanceof Promise) {
+				let s = source('');
+				//@ts-ignore
+				txt.text = () => ((get(s) ?? '') + '');
+				//@ts-ignore
+				a.then(res => {
+					set(s, res);
+				});
+			} else {
+				//@ts-ignore
+				txt.text = () => ((get(s) ?? '') + '');
+			}
+			nodes.push(txt);
+		}
+		if (next) {
+			nodes.push(next);
+		}
+		console.log(nodes);
+		return () => {
+			//@ts-ignore
+			return nodes.reduce((a, b) => a + b.text(), '');
+		}
+	}
+	template_effect((res) => {
+		set_text(node, res);
+	}, [fn(expression)]);
 }
 
 /**

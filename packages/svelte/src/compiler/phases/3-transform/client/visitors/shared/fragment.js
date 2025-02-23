@@ -69,16 +69,16 @@ export function process_children(nodes, initial, is_element, { visit, state }) {
 		}
 
 		state.template.push(' ');
-
-		const { has_state, value } = build_template_chunk(sequence, visit, state);
-
 		// if this is a standalone `{expression}`, make sure we handle the case where
 		// no text node was created because the expression was empty during SSR
 		const is_text = sequence.length === 1;
 		const id = flush_node(is_text, 'text');
+		//@ts-ignore
+		const { has_state, tagged, value } = build_template_chunk(sequence, visit, state, id);
 
-		const update = b.stmt(b.call('$.set_text', id, value));
-
+		const update = b.stmt(tagged);
+		//@ts-ignore
+		update.is_update = true;
 		if (has_state && !within_bound_contenteditable) {
 			state.update.push(update);
 		} else {

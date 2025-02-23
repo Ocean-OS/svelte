@@ -132,7 +132,7 @@ export {
 	mark_store_binding
 } from './reactivity/store.js';
 export { boundary } from './dom/blocks/boundary.js';
-export { set_text } from './render.js';
+export { set_text, text_effect } from './render.js';
 export {
 	get,
 	safe_get,
