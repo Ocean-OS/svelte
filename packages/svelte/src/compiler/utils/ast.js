@@ -236,15 +236,17 @@ export function extract_identifiers_from_destructuring(node, nodes = []) {
 /**
  * Extracts all destructured assignments from a pattern.
  * @param {ESTree.Node} param
+ * @param {boolean} [is_array] whether the initial value is an array expression
  * @returns {DestructuredAssignment[]}
  */
-export function extract_paths(param) {
+export function extract_paths(param, is_array = false) {
 	return _extract_paths(
 		[],
 		param,
 		(node) => /** @type {ESTree.Identifier | ESTree.MemberExpression} */ (node),
 		(node) => /** @type {ESTree.Identifier | ESTree.MemberExpression} */ (node),
-		false
+		false,
+		is_array
 	);
 }
 
@@ -256,7 +258,7 @@ export function extract_paths(param) {
  * @param {boolean} has_default_value
  * @returns {DestructuredAssignment[]}
  */
-function _extract_paths(assignments = [], param, expression, update_expression, has_default_value) {
+function _extract_paths(assignments = [], param, expression, update_expression, has_default_value, is_root_with_array = false) {
 	switch (param.type) {
 		case 'Identifier':
 		case 'MemberExpression':
@@ -352,7 +354,7 @@ function _extract_paths(assignments = [], param, expression, update_expression, 
 						}
 					} else {
 						/** @type {DestructuredAssignment['expression']} */
-						const array_expression = (object) => b.member(expression(object), b.literal(i), true);
+						const array_expression = (object) => b.member(is_root_with_array ? expression(object) : b.array([b.spread(expression(object))]), b.literal(i), true);
 						_extract_paths(
 							assignments,
 							element,

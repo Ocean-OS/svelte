@@ -143,7 +143,7 @@ export function VariableDeclaration(node, context) {
 					);
 				} else {
 					const tmp = context.state.scope.generate('tmp');
-					const paths = extract_paths(declarator.id);
+					const paths = extract_paths(declarator.id, is_array(value));
 					declarations.push(
 						b.declarator(b.id(tmp), value),
 						...paths.map((path) => {
@@ -226,7 +226,7 @@ export function VariableDeclaration(node, context) {
 					// Turn export let into props. It's really really weird because export let { x: foo, z: [bar]} = ..
 					// means that foo and bar are the props (i.e. the leafs are the prop names), not x and z.
 					const tmp = context.state.scope.generate('tmp');
-					const paths = extract_paths(declarator.id);
+					const paths = extract_paths(declarator.id, declarator.init == null ? false : is_array(declarator.init));
 
 					declarations.push(
 						b.declarator(
@@ -290,6 +290,21 @@ export function VariableDeclaration(node, context) {
 }
 
 /**
+ * @param {import('estree').Node} value 
+ * @returns {boolean}
+ */
+function is_array(value) {
+	console.log(value);
+	if(value?.type === 'ArrayExpression') return true;
+	if (value?.type === 'CallExpression' && value.arguments.length) {
+		if (value.callee.type === 'Identifier' && value.callee.name === '$.proxy') {
+			return is_array(value.arguments[0]);
+		}
+	}
+	return false;
+}
+
+/**
  * Creates the output for a state declaration in legacy mode.
  * @param {VariableDeclarator} declarator
  * @param {ComponentClientTransformState} scope
@@ -306,7 +321,7 @@ function create_state_declarators(declarator, { scope, analysis }, value) {
 	}
 
 	const tmp = scope.generate('tmp');
-	const paths = extract_paths(declarator.id);
+	const paths = extract_paths(declarator.id, is_array(value));
 	return [
 		b.declarator(b.id(tmp), value),
 		...paths.map((path) => {
