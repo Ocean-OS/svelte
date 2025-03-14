@@ -6,15 +6,12 @@ import {
 	update_effect,
 	get,
 	is_destroying_effect,
-	is_flushing_effect,
 	remove_reactions,
 	schedule_effect,
 	set_active_reaction,
 	set_is_destroying_effect,
-	set_is_flushing_effect,
 	set_signal_status,
 	untrack,
-	skip_reaction,
 	untracking
 } from '../runtime.js';
 import {
@@ -42,7 +39,7 @@ import * as e from '../errors.js';
 import { DEV } from 'esm-env';
 import { define_property } from '../../shared/utils.js';
 import { get_next_sibling } from '../dom/operations.js';
-import { derived, destroy_derived } from './deriveds.js';
+import { derived } from './deriveds.js';
 import { component_context, dev_current_component_function } from '../context.js';
 
 /**
@@ -85,13 +82,12 @@ function push_effect(effect, parent_effect) {
  * @returns {Effect}
  */
 function create_effect(type, fn, sync, push = true) {
-	var is_root = (type & ROOT_EFFECT) !== 0;
-	var parent_effect = active_effect;
+	var parent = active_effect;
 
 	if (DEV) {
 		// Ensure the parent is never an inspect effect
-		while (parent_effect !== null && (parent_effect.f & INSPECT_EFFECT) !== 0) {
-			parent_effect = parent_effect.parent;
+		while (parent !== null && (parent.f & INSPECT_EFFECT) !== 0) {
+			parent = parent.parent;
 		}
 	}
 
@@ -106,7 +102,7 @@ function create_effect(type, fn, sync, push = true) {
 		fn,
 		last: null,
 		next: null,
-		parent: is_root ? null : parent_effect,
+		parent,
 		prev: null,
 		teardown: null,
 		transitions: null,
@@ -118,17 +114,12 @@ function create_effect(type, fn, sync, push = true) {
 	}
 
 	if (sync) {
-		var previously_flushing_effect = is_flushing_effect;
-
 		try {
-			set_is_flushing_effect(true);
 			update_effect(effect);
 			effect.f |= EFFECT_RAN;
 		} catch (e) {
 			destroy_effect(effect);
 			throw e;
-		} finally {
-			set_is_flushing_effect(previously_flushing_effect);
 		}
 	} else if (fn !== null) {
 		schedule_effect(effect);
@@ -144,9 +135,9 @@ function create_effect(type, fn, sync, push = true) {
 		effect.teardown === null &&
 		(effect.f & (EFFECT_HAS_DERIVED | BOUNDARY_EFFECT)) === 0;
 
-	if (!inert && !is_root && push) {
-		if (parent_effect !== null) {
-			push_effect(effect, parent_effect);
+	if (!inert && push) {
+		if (parent !== null) {
+			push_effect(effect, parent);
 		}
 
 		// if we're in a derived, add the effect there too
@@ -164,13 +155,7 @@ function create_effect(type, fn, sync, push = true) {
  * @returns {boolean}
  */
 export function effect_tracking() {
-	if (active_reaction === null || untracking) {
-		return false;
-	}
-
-	// If it's skipped, that's because we're inside an unowned
-	// that is not being tracked by another reaction
-	return !skip_reaction;
+	return active_reaction !== null && !untracking;
 }
 
 /**
@@ -405,7 +390,14 @@ export function destroy_effect_children(signal, remove_dom = false) {
 
 	while (effect !== null) {
 		var next = effect.next;
-		destroy_effect(effect, remove_dom);
+
+		if ((effect.f & ROOT_EFFECT) !== 0) {
+			// this is now an independent root
+			effect.parent = null;
+		} else {
+			destroy_effect(effect, remove_dom);
+		}
+
 		effect = next;
 	}
 }

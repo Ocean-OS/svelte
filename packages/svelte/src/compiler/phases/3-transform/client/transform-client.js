@@ -312,7 +312,7 @@ export function client_component(analysis, options) {
 
 			const setter = b.set(key, [
 				b.stmt(b.call(b.id(name), b.id('$$value'))),
-				b.stmt(b.call('$.flush_sync'))
+				b.stmt(b.call('$.flush'))
 			]);
 
 			if (analysis.runes && binding.initial) {
@@ -562,6 +562,11 @@ export function client_component(analysis, options) {
 		component_block.body.unshift(b.stmt(b.call('$.check_target', b.id('new.target'))));
 	}
 
+	if (analysis.props_id) {
+		// need to be placed on first line of the component for hydration
+		component_block.body.unshift(b.const(analysis.props_id, b.call('$.props_id')));
+	}
+
 	if (state.events.size > 0) {
 		body.push(
 			b.stmt(b.call('$.delegate', b.array(Array.from(state.events).map((name) => b.literal(name)))))
@@ -591,7 +596,7 @@ export function client_component(analysis, options) {
 				/** @type {ESTree.Property[]} */ (
 					[
 						prop_def.attribute ? b.init('attribute', b.literal(prop_def.attribute)) : undefined,
-						prop_def.reflect ? b.init('reflect', b.literal(true)) : undefined,
+						prop_def.reflect ? b.init('reflect', b.true) : undefined,
 						prop_def.type ? b.init('type', b.literal(prop_def.type)) : undefined
 					].filter(Boolean)
 				)

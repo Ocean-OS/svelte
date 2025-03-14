@@ -51,6 +51,8 @@ A `$:` statement could also be used to create side effects. In Svelte 5, this is
 </script>
 ```
 
+Note that [when `$effect` runs is different]($effect#Understanding-dependencies) than when `$:` runs.
+
 > [!DETAILS] Why we did this
 > `$:` was a great shorthand and easy to get started with: you could slap a `$:` in front of most code and it would somehow work. This intuitiveness was also its drawback the more complicated your code became, because it wasn't as easy to reason about. Was the intent of the code to create a derivation, or a side effect? With `$derived` and `$effect`, you have a bit more up-front decision making to do (spoiler alert: 90% of the time you want `$derived`), but future-you and other developers on your team will have an easier time.
 >
@@ -722,7 +724,39 @@ If a bindable property has a default value (e.g. `let { foo = $bindable('bar') }
 
 ### `accessors` option is ignored
 
-Setting the `accessors` option to `true` makes properties of a component directly accessible on the component instance. In runes mode, properties are never accessible on the component instance. You can use component exports instead if you need to expose them.
+Setting the `accessors` option to `true` makes properties of a component directly accessible on the component instance.
+
+```svelte
+<svelte:options accessors={true} />
+
+<script>
+	// available via componentInstance.name
+	export let name;
+</script>
+```
+
+In runes mode, properties are never accessible on the component instance. You can use component exports instead if you need to expose them.
+
+```svelte
+<script>
+	let { name } = $props();
+	// available via componentInstance.getName()
+	export const getName = () => name;
+</script>
+```
+
+Alternatively, if the place where they are instantiated is under your control, you can also make use of runes inside `.js/.ts` files by adjusting their ending to include `.svelte`, i.e. `.svelte.js` or `.svelte.ts`, and then use `$state`:
+
+```js
++++import { mount } from 'svelte';+++
+import App from './App.svelte'
+
+---const app = new App({ target: document.getElementById("app"), props: { foo: 'bar' } });
+app.foo = 'baz'---
++++const props = $state({ foo: 'bar' });
+const app = mount(App, { target: document.getElementById("app"), props });
+props.foo = 'baz';+++
+```
 
 ### `immutable` option is ignored
 

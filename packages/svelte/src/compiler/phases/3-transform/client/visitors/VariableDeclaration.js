@@ -42,6 +42,11 @@ export function VariableDeclaration(node, context) {
 				continue;
 			}
 
+			if (rune === '$props.id') {
+				// skip
+				continue;
+			}
+
 			if (rune === '$props') {
 				/** @type {string[]} */
 				const seen = ['$$slots', '$$events', '$$legacy'];
@@ -111,8 +116,7 @@ export function VariableDeclaration(node, context) {
 			}
 
 			const args = /** @type {CallExpression} */ (init).arguments;
-			const value =
-				args.length === 0 ? b.id('undefined') : /** @type {Expression} */ (context.visit(args[0]));
+			const value = args.length > 0 ? /** @type {Expression} */ (context.visit(args[0])) : b.void0;
 
 			if (rune === '$state' || rune === '$state.raw') {
 				/**

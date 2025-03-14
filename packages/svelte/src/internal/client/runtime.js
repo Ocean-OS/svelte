@@ -9,7 +9,6 @@ import {
 } from './reactivity/effects.js';
 import {
 	EFFECT,
-	RENDER_EFFECT,
 	DIRTY,
 	MAYBE_DIRTY,
 	CLEAN,
@@ -26,13 +25,8 @@ import {
 	BOUNDARY_EFFECT
 } from './constants.js';
 import { flush_tasks } from './dom/task.js';
-import { internal_set } from './reactivity/sources.js';
-import {
-	destroy_derived,
-	destroy_derived_effects,
-	execute_derived,
-	update_derived
-} from './reactivity/deriveds.js';
+import { internal_set, old_values } from './reactivity/sources.js';
+import { destroy_derived_effects, update_derived } from './reactivity/deriveds.js';
 import * as e from './errors.js';
 import { FILENAME } from '../../constants.js';
 import { tracing_mode_flag } from '../flags/index.js';
@@ -44,29 +38,21 @@ import {
 	set_component_context,
 	set_dev_current_component_function
 } from './context.js';
+import { is_firefox } from './dom/operations.js';
 
-const FLUSH_MICROTASK = 0;
-const FLUSH_SYNC = 1;
 // Used for DEV time error handling
 /** @param {WeakSet<Error>} value */
 const handled_errors = new WeakSet();
-export let is_throwing_error = false;
+let is_throwing_error = false;
 
-// Used for controlling the flush of effects.
-let scheduler_mode = FLUSH_MICROTASK;
-// Used for handling scheduling
-let is_micro_task_queued = false;
+let is_flushing = false;
 
 /** @type {Effect | null} */
 let last_scheduled_effect = null;
 
-export let is_flushing_effect = false;
-export let is_destroying_effect = false;
+let is_updating_effect = false;
 
-/** @param {boolean} value */
-export function set_is_flushing_effect(value) {
-	is_flushing_effect = value;
-}
+export let is_destroying_effect = false;
 
 /** @param {boolean} value */
 export function set_is_destroying_effect(value) {
@@ -78,7 +64,6 @@ export function set_is_destroying_effect(value) {
 /** @type {Effect[]} */
 let queued_root_effects = [];
 
-let flush_count = 0;
 /** @type {Effect[]} Stack of effects, dev only */
 let dev_effect_stack = [];
 // Handle signal reactivity tree dependencies and reactions
@@ -121,7 +106,7 @@ export function set_derived_sources(sources) {
  * and until a new dependency is accessed — we track this via `skipped_deps`
  * @type {null | Value[]}
  */
-export let new_deps = null;
+let new_deps = null;
 
 let skipped_deps = 0;
 
@@ -189,18 +174,28 @@ export function check_dirtiness(reaction) {
 			// If we are working with a disconnected or an unowned signal that is now connected (due to an active effect)
 			// then we need to re-connect the reaction to the dependency
 			if (is_disconnected || is_unowned_connected) {
+				var derived = /** @type {Derived} */ (reaction);
+				var parent = derived.parent;
+
 				for (i = 0; i < length; i++) {
 					dependency = dependencies[i];
 
 					// We always re-add all reactions (even duplicates) if the derived was
-					// previously disconnected
-					if (is_disconnected || !dependency?.reactions?.includes(reaction)) {
-						(dependency.reactions ??= []).push(reaction);
+					// previously disconnected, however we don't if it was unowned as we
+					// de-duplicate dependencies in that case
+					if (is_disconnected || !dependency?.reactions?.includes(derived)) {
+						(dependency.reactions ??= []).push(derived);
 					}
 				}
 
 				if (is_disconnected) {
-					reaction.f ^= DISCONNECTED;
+					derived.f ^= DISCONNECTED;
+				}
+				// If the unowned derived is now fully connected to the graph again (it's unowned and reconnected, has a parent
+				// and the parent is not unowned), then we can mark it as connected again, removing the need for the unowned
+				// flag
+				if (is_unowned_connected && parent !== null && (parent.f & UNOWNED) === 0) {
+					derived.f ^= UNOWNED;
 				}
 			}
 
@@ -328,7 +323,7 @@ export function handle_error(error, effect, previous_effect, component_context) 
 		current_context = current_context.p;
 	}
 
-	const indent = /Firefox/.test(navigator.userAgent) ? '  ' : '\t';
+	const indent = is_firefox ? '  ' : '\t';
 	define_property(error, 'message', {
 		value: error.message + `\n${component_stack.map((name) => `\n${indent}in ${name}`).join('')}\n`
 	});
@@ -364,22 +359,18 @@ export function handle_error(error, effect, previous_effect, component_context) 
 /**
  * @param {Value} signal
  * @param {Effect} effect
- * @param {number} [depth]
+ * @param {boolean} [root]
  */
-function schedule_possible_effect_self_invalidation(signal, effect, depth = 0) {
+function schedule_possible_effect_self_invalidation(signal, effect, root = true) {
 	var reactions = signal.reactions;
 	if (reactions === null) return;
 
 	for (var i = 0; i < reactions.length; i++) {
 		var reaction = reactions[i];
 		if ((reaction.f & DERIVED) !== 0) {
-			schedule_possible_effect_self_invalidation(
-				/** @type {Derived} */ (reaction),
-				effect,
-				depth + 1
-			);
+			schedule_possible_effect_self_invalidation(/** @type {Derived} */ (reaction), effect, false);
 		} else if (effect === reaction) {
-			if (depth === 0) {
+			if (root) {
 				set_signal_status(reaction, DIRTY);
 			} else if ((reaction.f & CLEAN) !== 0) {
 				set_signal_status(reaction, MAYBE_DIRTY);
@@ -408,16 +399,9 @@ export function update_reaction(reaction) {
 	new_deps = /** @type {null | Value[]} */ (null);
 	skipped_deps = 0;
 	untracked_writes = null;
-	active_reaction = (flags & (BRANCH_EFFECT | ROOT_EFFECT)) === 0 ? reaction : null;
-	// prettier-ignore
 	skip_reaction =
-		(flags & UNOWNED) !== 0 &&
-		(!is_flushing_effect ||
-			// If we were previously not in a reactive context and we're reading an unowned derived
-			// that was created inside another reaction, then we don't fully know the real owner and thus
-			// we need to skip adding any reactions for this unowned
-				((previous_reaction === null || previous_untracking) &&
-				/** @type {Derived} */ (reaction).parent !== null));
+		(flags & UNOWNED) !== 0 && (untracking || !is_updating_effect || active_reaction === null);
+	active_reaction = (flags & (BRANCH_EFFECT | ROOT_EFFECT)) === 0 ? reaction : null;
 
 	derived_sources = null;
 	set_component_context(reaction.ctx);
@@ -458,6 +442,8 @@ export function update_reaction(reaction) {
 		if (
 			is_runes() &&
 			untracked_writes !== null &&
+			!untracking &&
+			deps !== null &&
 			(reaction.f & (DERIVED | MAYBE_DIRTY | DIRTY)) === 0
 		) {
 			for (i = 0; i < /** @type {Source[]} */ (untracked_writes).length; i++) {
@@ -474,6 +460,14 @@ export function update_reaction(reaction) {
 		// the same version
 		if (previous_reaction !== null) {
 			read_version++;
+
+			if (untracked_writes !== null) {
+				if (previous_untracked_writes === null) {
+					previous_untracked_writes = untracked_writes;
+				} else {
+					previous_untracked_writes.push(.../** @type {Source[]} */ (untracked_writes));
+				}
+			}
 		}
 
 		return result;
@@ -561,8 +555,10 @@ export function update_effect(effect) {
 
 	var previous_effect = active_effect;
 	var previous_component_context = component_context;
+	var was_updating_effect = is_updating_effect;
 
 	active_effect = effect;
+	is_updating_effect = true;
 
 	if (DEV) {
 		var previous_component_fn = dev_current_component_function;
@@ -604,6 +600,7 @@ export function update_effect(effect) {
 	} catch (error) {
 		handle_error(error, effect, previous_effect, previous_component_context || effect.ctx);
 	} finally {
+		is_updating_effect = was_updating_effect;
 		active_effect = previous_effect;
 
 		if (DEV) {
@@ -622,72 +619,69 @@ function log_effect_stack() {
 }
 
 function infinite_loop_guard() {
-	if (flush_count > 1000) {
-		flush_count = 0;
-		try {
-			e.effect_update_depth_exceeded();
-		} catch (error) {
+	try {
+		e.effect_update_depth_exceeded();
+	} catch (error) {
+		if (DEV) {
+			// stack is garbage, ignore. Instead add a console.error message.
+			define_property(error, 'stack', {
+				value: ''
+			});
+		}
+		// Try and handle the error so it can be caught at a boundary, that's
+		// if there's an effect available from when it was last scheduled
+		if (last_scheduled_effect !== null) {
 			if (DEV) {
-				// stack is garbage, ignore. Instead add a console.error message.
-				define_property(error, 'stack', {
-					value: ''
-				});
-			}
-			// Try and handle the error so it can be caught at a boundary, that's
-			// if there's an effect available from when it was last scheduled
-			if (last_scheduled_effect !== null) {
-				if (DEV) {
-					try {
-						handle_error(error, last_scheduled_effect, null, null);
-					} catch (e) {
-						// Only log the effect stack if the error is re-thrown
-						log_effect_stack();
-						throw e;
-					}
-				} else {
+				try {
 					handle_error(error, last_scheduled_effect, null, null);
+				} catch (e) {
+					// Only log the effect stack if the error is re-thrown
+					log_effect_stack();
+					throw e;
 				}
 			} else {
-				if (DEV) {
-					log_effect_stack();
-				}
-				throw error;
+				handle_error(error, last_scheduled_effect, null, null);
 			}
+		} else {
+			if (DEV) {
+				log_effect_stack();
+			}
+			throw error;
 		}
 	}
-	flush_count++;
 }
 
-/**
- * @param {Array<Effect>} root_effects
- * @returns {void}
- */
-function flush_queued_root_effects(root_effects) {
-	var length = root_effects.length;
-	if (length === 0) {
-		return;
-	}
-	infinite_loop_guard();
-
-	var previously_flushing_effect = is_flushing_effect;
-	is_flushing_effect = true;
+function flush_queued_root_effects() {
+	var was_updating_effect = is_updating_effect;
 
 	try {
-		for (var i = 0; i < length; i++) {
-			var effect = root_effects[i];
+		var flush_count = 0;
+		is_updating_effect = true;
 
-			if ((effect.f & CLEAN) === 0) {
-				effect.f ^= CLEAN;
+		while (queued_root_effects.length > 0) {
+			if (flush_count++ > 1000) {
+				infinite_loop_guard();
 			}
 
-			/** @type {Effect[]} */
-			var collected_effects = [];
+			var root_effects = queued_root_effects;
+			var length = root_effects.length;
 
-			process_effects(effect, collected_effects);
-			flush_queued_effects(collected_effects);
+			queued_root_effects = [];
+
+			for (var i = 0; i < length; i++) {
+				var collected_effects = process_effects(root_effects[i]);
+				flush_queued_effects(collected_effects);
+			}
 		}
 	} finally {
-		is_flushing_effect = previously_flushing_effect;
+		is_flushing = false;
+		is_updating_effect = was_updating_effect;
+
+		last_scheduled_effect = null;
+		if (DEV) {
+			dev_effect_stack = [];
+		}
+		old_values.clear();
 	}
 }
 
@@ -729,39 +723,17 @@ function flush_queued_effects(effects) {
 	}
 }
 
-function process_deferred() {
-	is_micro_task_queued = false;
-	if (flush_count > 1001) {
-		return;
-	}
-	const previous_queued_root_effects = queued_root_effects;
-	queued_root_effects = [];
-	flush_queued_root_effects(previous_queued_root_effects);
-
-	if (!is_micro_task_queued) {
-		flush_count = 0;
-		last_scheduled_effect = null;
-		if (DEV) {
-			dev_effect_stack = [];
-		}
-	}
-}
-
 /**
  * @param {Effect} signal
  * @returns {void}
  */
 export function schedule_effect(signal) {
-	if (scheduler_mode === FLUSH_MICROTASK) {
-		if (!is_micro_task_queued) {
-			is_micro_task_queued = true;
-			queueMicrotask(process_deferred);
-		}
+	if (!is_flushing) {
+		is_flushing = true;
+		queueMicrotask(flush_queued_root_effects);
 	}
 
-	last_scheduled_effect = signal;
-
-	var effect = signal;
+	var effect = (last_scheduled_effect = signal);
 
 	while (effect.parent !== null) {
 		effect = effect.parent;
@@ -783,120 +755,89 @@ export function schedule_effect(signal) {
  * bitwise flag passed in only. The collected effects array will be populated with all the user
  * effects to be flushed.
  *
- * @param {Effect} effect
- * @param {Effect[]} collected_effects
- * @returns {void}
+ * @param {Effect} root
+ * @returns {Effect[]}
  */
-function process_effects(effect, collected_effects) {
-	var current_effect = effect.first;
+function process_effects(root) {
+	/** @type {Effect[]} */
 	var effects = [];
 
-	main_loop: while (current_effect !== null) {
-		var flags = current_effect.f;
-		var is_branch = (flags & BRANCH_EFFECT) !== 0;
+	/** @type {Effect | null} */
+	var effect = root;
+
+	while (effect !== null) {
+		var flags = effect.f;
+		var is_branch = (flags & (BRANCH_EFFECT | ROOT_EFFECT)) !== 0;
 		var is_skippable_branch = is_branch && (flags & CLEAN) !== 0;
-		var sibling = current_effect.next;
 
 		if (!is_skippable_branch && (flags & INERT) === 0) {
-			if ((flags & RENDER_EFFECT) !== 0) {
-				if (is_branch) {
-					current_effect.f ^= CLEAN;
-				} else {
-					// Ensure we set the effect to be the active reaction
-					// to ensure that unowned deriveds are correctly tracked
-					// because we're flushing the current effect
-					var previous_active_reaction = active_reaction;
-					try {
-						active_reaction = current_effect;
-						if (check_dirtiness(current_effect)) {
-							update_effect(current_effect);
-						}
-					} catch (error) {
-						handle_error(error, current_effect, null, current_effect.ctx);
-					} finally {
-						active_reaction = previous_active_reaction;
+			if ((flags & EFFECT) !== 0) {
+				effects.push(effect);
+			} else if (is_branch) {
+				effect.f ^= CLEAN;
+			} else {
+				// Ensure we set the effect to be the active reaction
+				// to ensure that unowned deriveds are correctly tracked
+				// because we're flushing the current effect
+				var previous_active_reaction = active_reaction;
+				try {
+					active_reaction = effect;
+					if (check_dirtiness(effect)) {
+						update_effect(effect);
 					}
+				} catch (error) {
+					handle_error(error, effect, null, effect.ctx);
+				} finally {
+					active_reaction = previous_active_reaction;
 				}
+			}
 
-				var child = current_effect.first;
+			/** @type {Effect | null} */
+			var child = effect.first;
 
-				if (child !== null) {
-					current_effect = child;
-					continue;
-				}
-			} else if ((flags & EFFECT) !== 0) {
-				effects.push(current_effect);
+			if (child !== null) {
+				effect = child;
+				continue;
 			}
 		}
 
-		if (sibling === null) {
-			let parent = current_effect.parent;
+		var parent = effect.parent;
+		effect = effect.next;
 
-			while (parent !== null) {
-				if (effect === parent) {
-					break main_loop;
-				}
-				var parent_sibling = parent.next;
-				if (parent_sibling !== null) {
-					current_effect = parent_sibling;
-					continue main_loop;
-				}
-				parent = parent.parent;
-			}
+		while (effect === null && parent !== null) {
+			effect = parent.next;
+			parent = parent.parent;
 		}
-
-		current_effect = sibling;
 	}
 
-	// We might be dealing with many effects here, far more than can be spread into
-	// an array push call (callstack overflow). So let's deal with each effect in a loop.
-	for (var i = 0; i < effects.length; i++) {
-		child = effects[i];
-		collected_effects.push(child);
-		process_effects(child, collected_effects);
-	}
+	return effects;
 }
 
 /**
- * Internal version of `flushSync` with the option to not flush previous effects.
- * Returns the result of the passed function, if given.
- * @param {() => any} [fn]
- * @returns {any}
+ * Synchronously flush any pending updates.
+ * Returns void if no callback is provided, otherwise returns the result of calling the callback.
+ * @template [T=void]
+ * @param {(() => T) | undefined} [fn]
+ * @returns {T}
  */
-export function flush_sync(fn) {
-	var previous_scheduler_mode = scheduler_mode;
-	var previous_queued_root_effects = queued_root_effects;
+export function flushSync(fn) {
+	var result;
 
-	try {
-		infinite_loop_guard();
-
-		/** @type {Effect[]} */
-		const root_effects = [];
-
-		scheduler_mode = FLUSH_SYNC;
-		queued_root_effects = root_effects;
-		is_micro_task_queued = false;
-
-		flush_queued_root_effects(previous_queued_root_effects);
-
-		var result = fn?.();
-
-		flush_tasks();
-		if (queued_root_effects.length > 0 || root_effects.length > 0) {
-			flush_sync();
-		}
-
-		flush_count = 0;
-		last_scheduled_effect = null;
-		if (DEV) {
-			dev_effect_stack = [];
-		}
-
-		return result;
-	} finally {
-		scheduler_mode = previous_scheduler_mode;
-		queued_root_effects = previous_queued_root_effects;
+	if (fn) {
+		is_flushing = true;
+		flush_queued_root_effects();
+		result = fn();
 	}
+
+	flush_tasks();
+
+	while (queued_root_effects.length > 0) {
+		is_flushing = true;
+		flush_queued_root_effects();
+		flush_tasks();
+	}
+
+	return /** @type {T} */ (result);
 }
 
 /**
@@ -905,9 +846,9 @@ export function flush_sync(fn) {
  */
 export async function tick() {
 	await Promise.resolve();
-	// By calling flush_sync we guarantee that any pending state changes are applied after one tick.
+	// By calling flushSync we guarantee that any pending state changes are applied after one tick.
 	// TODO look into whether we can make flushing subsequent updates synchronously in the future.
-	flush_sync();
+	flushSync();
 }
 
 /**
@@ -918,15 +859,6 @@ export async function tick() {
 export function get(signal) {
 	var flags = signal.f;
 	var is_derived = (flags & DERIVED) !== 0;
-
-	// If the derived is destroyed, just execute it again without retaining
-	// its memoisation properties as the derived is stale
-	if (is_derived && (flags & DESTROYED) !== 0) {
-		var value = execute_derived(/** @type {Derived} */ (signal));
-		// Ensure the derived remains destroyed
-		destroy_derived(/** @type {Derived} */ (signal));
-		return value;
-	}
 
 	if (captured_signals !== null) {
 		captured_signals.add(signal);
@@ -947,7 +879,10 @@ export function get(signal) {
 				skipped_deps++;
 			} else if (new_deps === null) {
 				new_deps = [signal];
-			} else {
+			} else if (!skip_reaction || !new_deps.includes(signal)) {
+				// Normally we can push duplicated dependencies to `new_deps`, but if we're inside
+				// an unowned derived because skip_reaction is true, then we need to ensure that
+				// we don't have duplicates
 				new_deps.push(signal);
 			}
 		}
@@ -997,6 +932,10 @@ export function get(signal) {
 		}
 	}
 
+	if (is_destroying_effect && old_values.has(signal)) {
+		return old_values.get(signal);
+	}
+
 	return signal.v;
 }
 
@@ -1015,7 +954,7 @@ export function safe_get(signal) {
  * @template T
  * @param {() => T} fn
  */
-export function capture_signals(fn) {
+function capture_signals(fn) {
 	var previous_captured_signals = captured_signals;
 	captured_signals = new Set();
 

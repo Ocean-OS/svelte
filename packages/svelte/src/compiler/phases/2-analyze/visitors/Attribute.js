@@ -23,11 +23,6 @@ export function Attribute(node, context) {
 		if (node.name === 'value' && parent.name === 'option') {
 			mark_subtree_dynamic(context.path);
 		}
-
-		// special case <img loading="lazy" />
-		if (node.name === 'loading' && parent.name === 'img') {
-			mark_subtree_dynamic(context.path);
-		}
 	}
 
 	if (is_event_attribute(node)) {
@@ -167,16 +162,8 @@ function get_delegated_event(event_name, handler, context) {
 			return unhoisted;
 		}
 
-		if (binding !== null && binding.initial !== null && !binding.updated && !binding.is_called) {
-			const binding_type = binding.initial.type;
-
-			if (
-				binding_type === 'ArrowFunctionExpression' ||
-				binding_type === 'FunctionDeclaration' ||
-				binding_type === 'FunctionExpression'
-			) {
-				target_function = binding.initial;
-			}
+		if (binding?.is_function()) {
+			target_function = binding.initial;
 		}
 	}
 

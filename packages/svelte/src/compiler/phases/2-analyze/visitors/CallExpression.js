@@ -42,6 +42,9 @@ export function CallExpression(node, context) {
 				e.bindable_invalid_location(node);
 			}
 
+			// We need context in case the bound prop is stale
+			context.state.analysis.needs_context = true;
+
 			break;
 
 		case '$host':
@@ -55,7 +58,7 @@ export function CallExpression(node, context) {
 
 		case '$props':
 			if (context.state.has_props_rune) {
-				e.props_duplicate(node);
+				e.props_duplicate(node, rune);
 			}
 
 			context.state.has_props_rune = true;
@@ -73,6 +76,32 @@ export function CallExpression(node, context) {
 			}
 
 			break;
+
+		case '$props.id': {
+			const grand_parent = get_parent(context.path, -2);
+
+			if (context.state.analysis.props_id) {
+				e.props_duplicate(node, rune);
+			}
+
+			if (
+				parent.type !== 'VariableDeclarator' ||
+				parent.id.type !== 'Identifier' ||
+				context.state.ast_type !== 'instance' ||
+				context.state.scope !== context.state.analysis.instance.scope ||
+				grand_parent.type !== 'VariableDeclaration'
+			) {
+				e.props_id_invalid_placement(node);
+			}
+
+			if (node.arguments.length > 0) {
+				e.rune_invalid_arguments(node, rune);
+			}
+
+			context.state.analysis.props_id = parent.id;
+
+			break;
+		}
 
 		case '$state':
 		case '$state.raw':
@@ -203,14 +232,6 @@ export function CallExpression(node, context) {
 				e.state_ref_invalid_argument(node);
 			}
 			break;
-	}
-
-	if (node.callee.type === 'Identifier') {
-		const binding = context.state.scope.get(node.callee.name);
-
-		if (binding !== null) {
-			binding.is_called = true;
-		}
 	}
 
 	// `$inspect(foo)` or `$derived(foo) should not trigger the `static-state-reference` warning
