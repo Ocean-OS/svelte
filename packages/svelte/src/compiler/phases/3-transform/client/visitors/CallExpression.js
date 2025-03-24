@@ -25,13 +25,22 @@ export function CallExpression(node, context) {
 				is_ignored(node, 'state_snapshot_uncloneable') && b.true
 			);
 		case '$state.ref':
-			const binding = /** @type {Binding} */ (context.state.scope.get(/** @type {Identifier} */(node.arguments[0])?.name));
+			const binding = /** @type {Binding} */ (
+				context.state.scope.get(/** @type {Identifier} */ (node.arguments[0])?.name)
+			);
 			const properties = [b.get('value', [b.return(b.call('$.get', node.arguments[0]))])];
-			if (binding.kind === 'state') {
-				properties.push(b.set('value', [b.return(b.call('$.set', node.arguments[0], b.call('$.proxy', b.id('$$value'))))]));
-			} else if (binding.kind === 'raw_state') {
-				properties.push(b.set('value', [b.return(b.call('$.set', node.arguments[0], b.id('$$value')))]));
-			}
+			properties.push(
+				b.set('value', [
+					b.return(
+						b.call(
+							'$.set',
+							node.arguments[0],
+							b.id('$$value'),
+							binding.kind === 'state' ? b.true : undefined
+						)
+					)
+				])
+			);
 			return b.object(properties);
 		case '$effect.root':
 			return b.call(
