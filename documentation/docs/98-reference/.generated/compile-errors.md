@@ -642,6 +642,12 @@ Declaring or accessing a prop starting with `$$` is illegal (they are reserved f
 Cyclical dependency detected: %cycle%
 ```
 
+### ref_invalid_argument
+
+```
+`%rune%` must be called with a reactive variable or object property as its argument
+```
+
 ### render_tag_invalid_call_expression
 
 ```

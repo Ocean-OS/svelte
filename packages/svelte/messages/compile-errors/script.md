@@ -146,6 +146,10 @@ This turned out to be buggy and unpredictable, particularly when working with de
 
 > Cyclical dependency detected: %cycle%
 
+## ref_invalid_argument
+
+> `%rune%` must be called with a reactive variable or object property as its argument
+
 ## rune_invalid_arguments
 
 > `%rune%` cannot be called with arguments

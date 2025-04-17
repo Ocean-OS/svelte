@@ -222,10 +222,29 @@ export function CallExpression(node, context) {
 			}
 
 			break;
+
+		case '$ref':
+		case '$ref.raw':
+			if (node.arguments.length !== 1) {
+				e.rune_invalid_arguments_length(node, rune, 'exactly one argument');
+			} else {
+				const arg = node.arguments[0];
+				if (arg.type === 'Identifier') {
+					const binding = context.state.scope.get(arg.name);
+					if (binding && binding.kind !== 'normal') {
+						binding.reassigned = true;
+					} else {
+						e.ref_invalid_argument(node, rune);
+					}
+				} else if (arg.type !== 'MemberExpression') {
+					e.ref_invalid_argument(node, rune);
+				}
+			}
+			break;
 	}
 
-	// `$inspect(foo)` or `$derived(foo) should not trigger the `static-state-reference` warning
-	if (rune === '$inspect' || rune === '$derived') {
+	// `$inspect(foo)`, `$ref(foo)` or `$derived(foo)` should not trigger the `static-state-reference` warning
+	if (rune === '$inspect' || rune === '$derived' || rune === '$ref' || rune === '$ref.raw') {
 		context.next({ ...context.state, function_depth: context.state.function_depth + 1 });
 	} else {
 		context.next();

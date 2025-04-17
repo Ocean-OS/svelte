@@ -509,3 +509,40 @@ declare namespace $host {
 	/** @deprecated */
 	export const toString: never;
 }
+type Ref<T> = [() => T, (next: T) => T];
+type SnapshotRef<T> = [
+	() => ReturnType<typeof $state.snapshot<T>>,
+	(next: T) => ReturnType<typeof $state.snapshot<T>>
+];
+/**
+ * Creates a tuple with getter and setter functions for the specified reactive L-value.
+ */
+declare function $ref<T>(source: T): Ref<T>;
+
+declare namespace $ref {
+	/**
+	 * Creates a tuple with a getter and setter for the specified reactive L-value.
+	 * Unlike `$ref`, `$ref.raw` [snapshots](https://svelte.dev/docs/svelte/$state#$state.snapshot) the return values of the getter and setter, making the values immutable. 
+	 */
+	export function raw<T>(source: T): SnapshotRef<T>;
+	// prevent intellisense from being unhelpful
+	/** @deprecated */
+	export const apply: never;
+	/** @deprecated */
+	// @ts-ignore
+	export const arguments: never;
+	/** @deprecated */
+	export const bind: never;
+	/** @deprecated */
+	export const call: never;
+	/** @deprecated */
+	export const caller: never;
+	/** @deprecated */
+	export const length: never;
+	/** @deprecated */
+	export const name: never;
+	/** @deprecated */
+	export const prototype: never;
+	/** @deprecated */
+	export const toString: never;
+}

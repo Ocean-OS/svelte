@@ -3178,5 +3178,35 @@ declare namespace $host {
 	/** @deprecated */
 	export const toString: never;
 }
+type Ref<T> = [() => T, (next: T) => T];
+type SnapshotRef<T> = [
+	() => ReturnType<typeof $state.snapshot<T>>,
+	(next: T) => ReturnType<typeof $state.snapshot<T>>
+];
+declare function $ref<T>(source: T): Ref<T>;
+
+declare namespace $ref {
+	export function raw<T>(source: T): SnapshotRef<T>;
+	// prevent intellisense from being unhelpful
+	/** @deprecated */
+	export const apply: never;
+	/** @deprecated */
+	// @ts-ignore
+	export const arguments: never;
+	/** @deprecated */
+	export const bind: never;
+	/** @deprecated */
+	export const call: never;
+	/** @deprecated */
+	export const caller: never;
+	/** @deprecated */
+	export const length: never;
+	/** @deprecated */
+	export const name: never;
+	/** @deprecated */
+	export const prototype: never;
+	/** @deprecated */
+	export const toString: never;
+}
 
 //# sourceMappingURL=index.d.ts.map

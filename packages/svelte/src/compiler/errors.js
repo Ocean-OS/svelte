@@ -344,6 +344,16 @@ export function reactive_declaration_cycle(node, cycle) {
 }
 
 /**
+ * `%rune%` must be called with a reactive variable or object property as its argument
+ * @param {null | number | NodeLike} node
+ * @param {string} rune
+ * @returns {never}
+ */
+export function ref_invalid_argument(node, rune) {
+	e(node, 'ref_invalid_argument', `\`${rune}\` must be called with a reactive variable or object property as its argument\nhttps://svelte.dev/e/ref_invalid_argument`);
+}
+
+/**
  * `%rune%` cannot be called with arguments
  * @param {null | number | NodeLike} node
  * @param {string} rune

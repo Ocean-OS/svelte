@@ -1,4 +1,4 @@
-/** @import { CallExpression, Expression } from 'estree' */
+/** @import { CallExpression, Expression, Identifier, MemberExpression } from 'estree' */
 /** @import { Context } from '../types' */
 import { dev, is_ignored } from '../../../../state.js';
 import * as b from '../../../../utils/builders.js';
@@ -33,6 +33,11 @@ export function CallExpression(node, context) {
 		case '$inspect':
 		case '$inspect().with':
 			return transform_inspect_rune(node, context);
+
+		case '$ref':
+			return transform_ref(node, context);
+		case '$ref.raw':
+			return transform_ref(node, context, true);
 	}
 
 	if (
@@ -60,4 +65,25 @@ export function CallExpression(node, context) {
 	}
 
 	context.next();
+}
+
+/**
+ * @param {CallExpression} node
+ * @param {Context} context
+ * @param {boolean} [raw=false]
+ */
+function transform_ref(node, context, raw = false) {
+	/** @type {Identifier | MemberExpression} */
+	const arg = /** @type {Identifier | MemberExpression} */ (node.arguments[0]);
+	const getter = b.arrow(
+		[],
+		raw
+			? b.call('$.snapshot', /** @type {Expression} */ (context.visit(arg)))
+			: /** @type {Expression} */ (context.visit(arg))
+	);
+	const assignment = /** @type {Expression} */ (
+		context.visit(b.assignment('=', arg, b.id('$$value')))
+	);
+	const setter = b.arrow([b.id('$$value')], raw ? b.call('$.snapshot', assignment) : assignment);
+	return b.array([getter, setter]);
 }
