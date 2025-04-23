@@ -57,6 +57,18 @@ export interface OptimizeOptions {
 	hydrate?: boolean;
 }
 
+export interface AppCompileOptions extends ModuleCompileOptions {
+	/**
+	 * The directory to use as a base for the app. In most cases, this is the directory where your main component resides. 
+	 */
+	entry?: string;
+	filename: string;
+	/**
+	 * How deep to recurse into imports. For example, if `A.svelte` imports `B.svelte`, which imports `C.svelte`, a depth of 3 would be able to access `C.svelte`.
+	 */
+	depth?: number;
+}
+
 export interface CompileOptions extends ModuleCompileOptions {
 	/**
 	 * Sets the name of the resulting JavaScript class (though the compiler will rename it if it would otherwise conflict with other variables in scope).

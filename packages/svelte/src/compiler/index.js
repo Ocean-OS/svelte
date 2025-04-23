@@ -1,5 +1,5 @@
 /** @import { LegacyRoot } from './types/legacy-nodes.js' */
-/** @import { CompileOptions, CompileResult, ValidatedCompileOptions, ModuleCompileOptions } from '#compiler' */
+/** @import { CompileOptions, CompileResult, ValidatedCompileOptions, ModuleCompileOptions, AppCompileOptions } from '#compiler' */
 /** @import { AST } from './public.js' */
 import { walk as zimmerframe_walk } from 'zimmerframe';
 import { convert } from './legacy.js';
@@ -10,6 +10,7 @@ import { analyze_component, analyze_module } from './phases/2-analyze/index.js';
 import { transform_component, transform_module } from './phases/3-transform/index.js';
 import { validate_component_options, validate_module_options } from './validate-options.js';
 import * as state from './state.js';
+import { remove_bom } from './utils/string.js';
 export { default as preprocess } from './preprocess/index.js';
 
 /**
@@ -145,17 +146,6 @@ function to_public_ast(source, ast, modern) {
 }
 
 /**
- * Remove the byte order mark from a string if it's present since it would mess with our template generation logic
- * @param {string} source
- */
-function remove_bom(source) {
-	if (source.charCodeAt(0) === 0xfeff) {
-		return source.slice(1);
-	}
-	return source;
-}
-
-/**
  * @deprecated Replace this with `import { walk } from 'estree-walker'`
  * @returns {never}
  */
@@ -165,5 +155,13 @@ export function walk() {
 	);
 }
 
+function compileApp_browser() {
+	throw new Error(`\`compileApp\` is not supported in a browser environment`);
+}
+
 export { VERSION } from '../version.js';
 export { migrate } from './migrate/index.js';
+export const compileApp =
+	typeof globalThis.process === 'object' && process?.version
+		? (await import('./compile_app.js')).compileApp
+		: compileApp_browser;
