@@ -1,5 +1,5 @@
 /** @import { AppCompileOptions, Scope, ValidatedCompileOptions } from '#compiler' */
-/** @import { Declaration, ExportAllDeclaration, ExportDefaultDeclaration, ExportNamedDeclaration, ImportDeclaration, Node, Program } from 'estree' */
+/** @import { BaseModuleSpecifier, BlockStatement, CallExpression, Declaration, ExportAllDeclaration, ExportDefaultDeclaration, ExportNamedDeclaration, Identifier, ImportDeclaration, ImportSpecifier, Literal, Node, Pattern, Program, Property, Statement, VariableDeclaration } from 'estree' */
 import { parse } from 'path';
 import { readFileSync } from 'fs';
 /** @import { LegacyRoot } from './types/legacy-nodes.js' */
@@ -11,23 +11,82 @@ import { parse as _parse } from './phases/1-parse/index.js';
 import { remove_typescript_nodes } from './phases/1-parse/remove_typescript_nodes.js';
 import { analyze_component, analyze_module } from './phases/2-analyze/index.js';
 import { transform_component, transform_module } from './phases/3-transform/index.js';
-import { validate_component_options, validate_module_options } from './validate-options.js';
+import {
+	validate_compileapp_options,
+	validate_component_options,
+	validate_module_options
+} from './validate-options.js';
 import * as state from './state.js';
 import { remove_bom } from './utils/string.js';
 import { print } from 'esrap';
 import is_reference from 'is-reference';
 import * as b from './utils/builders.js';
+import { extract_identifiers } from './utils/ast.js';
+import { client_component } from './phases/3-transform/client/transform-client.js';
 export { default as preprocess } from './preprocess/index.js';
+
+/**
+ * @param {ImportDeclaration['specifiers']} specifiers
+ * @returns {Pattern}
+ */
+function to_pattern(specifiers) {
+	/** @type {Property[]} */
+	const properties = [];
+	for (const specifier of specifiers) {
+		switch (specifier.type) {
+			case 'ImportSpecifier': {
+				const key = specifier.imported;
+				const value = specifier.local;
+				properties.push(b.prop('init', key, value));
+				break;
+			}
+			case 'ImportDefaultSpecifier': {
+				const key = b.id('default');
+				const value = specifier.local;
+				properties.push(b.prop('init', key, value));
+				break;
+			}
+			case 'ImportNamespaceSpecifier': {
+				return specifier.local;
+			}
+		}
+	}
+	return b.object_pattern(properties);
+}
+
+/**
+ * @param {ImportDeclaration['specifiers']} specifiers
+ */
+function extract_import_identifiers(specifiers) {
+	const identifiers = [];
+	for (const specifier of specifiers) {
+		identifiers.push(specifier.local);
+	}
+	return identifiers;
+}
+
+/**
+ * Here's my current thought process for this:
+ * 1. We should only assume that imports whose resolved path ends with `.svelte` are actually components
+ * 2. We should only use static components for optimization
+ * Here's a few ideas for how this can be implemented.
+ */
+
 /**
  * @param {AppCompileOptions} options
+ * @returns {[Program, import('./phases/types.js').ComponentAnalysis]}
  */
 function compileApp(options) {
-	const { filename } = options;
-	const entry = 'entry' in options ? options.entry : parse(filename).dir;
-	const depth = 'depth' in options ? options.depth ?? 1 : 1;
+	const {
+		filename,
+		entry = parse(filename).dir,
+		depth = 1,
+		...component_options
+	} = validate_compileapp_options(options, '');
 	const source = remove_bom(readFileSync(filename, 'utf-8'));
-	state.reset_warning_filter(options.warningFilter);
-	const validated = validate_component_options(options, '');
+	state.reset_warning_filter(component_options.warningFilter);
+	const validated = validate_component_options(component_options, '');
+	if (validated.generate !== 'client') throw new Error('not available yet');
 	state.reset(source, validated);
 
 	let parsed = _parse(source);
@@ -52,7 +111,7 @@ function compileApp(options) {
 
 	const analysis = analyze_component(parsed, source, combined_options);
 	const result = transform_component(analysis, source, combined_options);
-	if (depth < 1) return parse_acorn(result.js.code, false, false);
+	if (depth < 1) return [parse_acorn(result.js.code, false, false), analysis];
 	/**
 	 * @typedef {object} ComponentEntry
 	 * @property {AST.Component} node
@@ -60,8 +119,9 @@ function compileApp(options) {
 	 */
 	/** @type {Map<ImportDeclaration, ComponentEntry[]>} */
 	const imported_components = new Map();
+	const scope = /** @type {Scope} */ (analysis.module.scope);
 	const walk_state = {
-		scope: /** @type {Scope} */ (analysis.instance.scopes.get(parsed.fragment))
+		scope
 	};
 	zimmerframe_walk(/** @type {AST.SvelteNode} */ (parsed.fragment), walk_state, {
 		Component(node, context) {
@@ -101,7 +161,9 @@ function compileApp(options) {
 			context.next();
 		},
 		Fragment(node, context) {
-			const scope = /** @type {Scope} */ (analysis.instance.scopes.get(parsed.fragment));
+			const scope = /** @type {Scope} */ (
+				analysis.instance.scopes.get(node) ?? analysis.module.scopes.get(node)
+			);
 			context.next(
 				scope != null
 					? {
@@ -111,22 +173,170 @@ function compileApp(options) {
 			);
 		}
 	});
-	/** @type {Array<{source: string, resolved: string, declaration: ImportDeclaration }>} */
+	/** @param {string} resolved */
+	function normalize_resolved(resolved) {
+		return resolved.replace(/^file\:\/{3}/, '');
+	}
+	/** @type {Array<{source: string, resolved: string, declaration: ImportDeclaration, components: ComponentEntry[] | undefined }>} */
 	const imports = [];
+	const existing_imports = [];
 	for (const child of parsed.instance?.content.body ?? []) {
 		if (child.type === 'ImportDeclaration' && imported_components.has(child)) {
 			const source = /** @type {string} */ (child.source.value);
-			const resolved = import.meta.resolve(source, entry);
+			const resolved = normalize_resolved(import.meta.resolve(source, entry));
 			if (resolved.match(/\.svelte$/)) {
-				imports.push({ source, resolved, declaration: child });
+				imports.push({
+					source,
+					resolved,
+					declaration: child,
+					components: imported_components.get(child)
+				});
 			}
+			existing_imports.push({ resolved, declaration: child });
 		}
 	}
 	const js_ast = parse_acorn(result.js.code, false, false);
+	/**
+	 * @param {ImportDeclaration} a
+	 * @param {ImportDeclaration} b
+	 */
+	function is_same_importdeclaration(a, b) {
+		if (
+			import.meta.resolve(/** @type {string} */ (a.source.value)) !==
+			import.meta.resolve(/** @type {string} */ (b.source.value))
+		) {
+			return false;
+		}
+		if (a.specifiers.length !== b.specifiers.length) {
+			return false;
+		}
+		for (let index = 0; index < a.specifiers.length; index++) {
+			const a_specifier = a.specifiers[index];
+			const b_specifier = b.specifiers[index];
+			if (a_specifier.type !== b_specifier.type) {
+				return false;
+			}
+			if (a_specifier.local.name !== b_specifier.local.name) {
+				return false;
+			}
+			if (a_specifier.type === 'ImportSpecifier' && a_specifier.type === b_specifier.type) {
+				if (a_specifier.imported.type !== b_specifier.imported.type) {
+					return false;
+				} else {
+					if (a_specifier.imported.type === 'Identifier') {
+						if (
+							a_specifier.imported.name !== /** @type {Identifier} */ (b_specifier.imported).name
+						) {
+							return false;
+						}
+					} else {
+						if (
+							a_specifier.imported.value !== /** @type {Literal} */ (b_specifier.imported).value
+						) {
+							return false;
+						}
+					}
+				}
+			}
+		}
+		return true;
+	}
+	for (const child of js_ast.body) {
+		if (child.type === 'ImportDeclaration') {
+			const found = imports.find(({ declaration }) =>
+				is_same_importdeclaration(child, declaration)
+			);
+			if (found) {
+				//@ts-ignore
+				imported_components.set(child, imported_components.get(found.declaration));
+				found.declaration = child;
+			}
+		}
+	}
+	// const js_ast = parsed.instance?.content ?? {type: 'Program', body: []};
 	const compiled_imports = [];
-	for (const { resolved } of imports) {
-		const source = readFileSync(resolved, 'utf-8');
-		const compiled = compileApp({ ...options, depth: depth - 1 });
+	const result_body = [...js_ast.body];
+	/** @type {Program} */
+	let result_ast = {
+		type: 'Program',
+		body: result_body,
+		sourceType: 'module'
+	};
+	for (const { resolved, declaration, components = [] } of imports) {
+		// const source = readFileSync(resolved, 'utf-8');
+		const [compiled, import_analysis] = compileApp({
+			...options,
+			filename: resolved,
+			depth: depth - 1
+		});
+		if (
+			import_analysis.template.ast.metadata.dynamic === false &&
+			import_analysis.instance.ast.body.length === 0 &&
+			components.every(({ static: is_static }) => is_static) &&
+			declaration.specifiers.length === 1 &&
+			declaration.specifiers[0].type === 'ImportDefaultSpecifier' &&
+			imported_components.get(declaration) &&
+			imported_components.get(declaration)?.every(({ node }) => node.attributes.length === 0)
+		) {
+			/** @type {VariableDeclaration} */
+			const template_declaration = /** @type {VariableDeclaration} */ (
+				client_component(import_analysis, validated).body.find(
+					(node) =>
+						node.type === 'VariableDeclaration' &&
+						node.declarations.length === 1 &&
+						node.declarations[0]?.init?.type === 'CallExpression' &&
+						((node.declarations[0].init.callee.type === 'MemberExpression' &&
+							node.declarations[0].init.callee.object.type === 'Identifier' &&
+							node.declarations[0].init.callee.object.name === '$' &&
+							node.declarations[0].init.callee.property.type === 'Identifier' &&
+							node.declarations[0].init.callee.property.name === 'template') ||
+							(node.declarations[0].init.callee.type === 'Identifier' &&
+								node.declarations[0].init.callee.name === '$.template'))
+				)
+			);
+			const component_callee = declaration.specifiers[0].local.name;
+			if (template_declaration) {
+				const template_id = scope.generate('$$imported_root');
+				result_body[result_body.indexOf(declaration)] = b.var(
+					template_id,
+					/** @type {CallExpression} */ (template_declaration.declarations[0].init)
+				);
+				result_ast = /** @type {Program} */ (
+					zimmerframe_walk(/** @type {Node} */ (result_ast), null, {
+						CallExpression(node, context) {
+							if (
+								node.callee.type === 'Identifier' &&
+								node.callee.name === component_callee &&
+								context.path.at(-1)?.type === 'ExpressionStatement' &&
+								node.arguments.length === 2 &&
+								node.arguments[1]?.type === 'ObjectExpression' &&
+								node.arguments[1].properties.length === 0
+							) {
+								return b.call(`$.append`, b.call(template_id), node.arguments[0]);
+							}
+							context.next();
+						}
+					})
+				);
+			} else {
+				result_ast = /** @type {Program} */ (
+					zimmerframe_walk(/** @type {Node} */ (result_ast), null, {
+						ExpressionStatement(stmt, context) {
+							const { expression: node } = stmt;
+							if (
+								node.type === 'CallExpression' &&
+								node.callee.type === 'Identifier' &&
+								node.callee.name === component_callee &&
+								node.arguments.length === 1
+							) {
+								return b.empty;
+							}
+						}
+					})
+				);
+			}
+			continue;
+		}
 		let needs_async = false;
 		/** @type {Array<ExportAllDeclaration|ExportNamedDeclaration|ExportDefaultDeclaration>} */
 		const exported = [];
@@ -136,25 +346,6 @@ function compileApp(options) {
 				if (is_reference(node, /** @type {Node} */ (context.path.at(-1)))) {
 					used_idents.add(node.name);
 				}
-			},
-			FunctionExpression(node, context) {},
-			ArrowFunctionExpression(node, context) {},
-			FunctionDeclaration(node, context) {},
-			AwaitExpression(node, context) {
-				needs_async = true;
-				context.next();
-			},
-			ExportNamedDeclaration(node, context) {
-				exported.push(node);
-				context.next();
-			},
-			ExportAllDeclaration(node, context) {
-				exported.push(node);
-				context.next();
-			},
-			ExportDefaultDeclaration(node, context) {
-				exported.push(node);
-				context.next();
 			}
 		});
 		let exports_name = '$$exports';
@@ -164,43 +355,147 @@ function compileApp(options) {
 			used_idents.add((exports_name = `${exports_name}_${counter}`));
 		}
 		const export_replacements = new Map();
-		for (const _export of exported) {
-			switch (_export.type) {
+		const destructuring_pattern = to_pattern(declaration.specifiers);
+		const top_level_imports = [];
+		/** @type {[ExportAllDeclaration['type'], ExportDefaultDeclaration['type'], ExportNamedDeclaration['type']]} */
+		const export_node_types = [
+			'ExportAllDeclaration',
+			'ExportDefaultDeclaration',
+			'ExportNamedDeclaration'
+		];
+		const body = [];
+		for (const child of /** @type {Program} */ (compiled).body) {
+			switch (child.type) {
 				case 'ExportAllDeclaration': {
+					const local = scope.generate(`$$import`);
+					top_level_imports.push(
+						b.import_all(
+							local,
+							normalize_resolved(
+								import.meta.resolve(/** @type {string} */ (child.source.value), resolved)
+							)
+						)
+					);
+					if (child.exported === null) {
+						body.push(
+							b.stmt(
+								b.call(b.member_id('globalThis.Object.assign'), b.id(exports_name), b.id(local))
+							)
+						);
+					} else {
+						body.push(
+							b.stmt(
+								b.assignment(
+									'=',
+									b.member(b.id(exports_name), child.exported, child.exported.type === 'Literal'),
+									b.id(local)
+								)
+							)
+						);
+					}
+					break;
+				}
+				case 'ExportDefaultDeclaration': {
+					if (
+						child.declaration.type === 'ClassDeclaration' ||
+						child.declaration.type === 'FunctionDeclaration'
+					) {
+						if (child.declaration.id) {
+							body.push(child.declaration);
+							body.push(
+								b.stmt(
+									b.assignment('=', b.member(b.id(exports_name), 'default'), child.declaration.id)
+								)
+							);
+						} else {
+							const expression =
+								child.declaration.type === 'ClassDeclaration'
+									? b.class_expression(child.declaration.body)
+									: b.function(null, child.declaration.params, child.declaration.body);
+							body.push(
+								b.stmt(b.assignment('=', b.member(b.id(exports_name), 'default'), expression))
+							);
+						}
+					} else {
+						body.push(
+							b.stmt(b.assignment('=', b.member(b.id(exports_name), 'default'), child.declaration))
+						);
+					}
 					break;
 				}
 				case 'ExportNamedDeclaration': {
-					if (_export.declaration) {
-					} else {
-						const iife_body = [];
-						for (const specifier of _export.specifiers) {
-							iife_body.push(
+					if (child.declaration) {
+						body.push(child.declaration);
+						if (
+							child.declaration.type === 'FunctionDeclaration' ||
+							child.declaration.type === 'ClassDeclaration'
+						) {
+							body.push(
 								b.stmt(
 									b.assignment(
 										'=',
-										b.member(
-											b.id(exports_name),
-											specifier.exported.type === 'Literal'
-												? /** @type {string} */ (specifier.exported.value)
-												: specifier.exported.name,
-											specifier.exported.type === 'Literal'
-										),
+										b.member(b.id(exports_name), child.declaration.id),
+										child.declaration.id
+									)
+								)
+							);
+						} else {
+							for (const declaration of child.declaration.declarations) {
+								for (const identifier of extract_identifiers(declaration.id)) {
+									body.push(
+										b.stmt(b.assignment('=', b.member(b.id(exports_name), identifier), identifier))
+									);
+								}
+							}
+						}
+					} else if (child.specifiers.length) {
+						for (const specifier of child.specifiers) {
+							body.push(
+								b.stmt(
+									b.assignment(
+										'=',
+										b.member(b.id(exports_name), specifier.exported),
 										specifier.local
 									)
 								)
 							);
 						}
-						export_replacements.set(_export, b.call(b.arrow([], b.block(iife_body))));
 					}
 					break;
 				}
-				case 'ExportDefaultDeclaration': {
+				case 'ImportDeclaration': {
+					// const identifiers = extract_import_identifiers(child.specifiers);
+					// const res = [];
+					// const replacements = new Map();
+					if (
+						result_body.find(
+							(node) => node.type === 'ImportDeclaration' && is_same_importdeclaration(child, node)
+						)
+					) {
+						break;
+					}
+					const res = [];
+					for (const specifier of child.specifiers) {
+						let name = scope.generate(`$$import_${specifier.local.name}`);
+						// replacements.set(specifier.local.name, name);
+						res.push({ ...specifier, local: b.id(name) });
+						body.push(b.var(specifier.local, b.id(name)));
+					}
+					top_level_imports.push(b.import_declaration(res, child.source));
 					break;
 				}
+				default:
+					body.push(child);
 			}
 		}
+		body.push(b.return(b.id(exports_name)));
+		result_body[result_body.indexOf(declaration)] = b.var(
+			destructuring_pattern,
+			b.arrow([], b.block(/** @type {BlockStatement['body']} */ (body)))
+		);
+		result_body.unshift(...top_level_imports);
 	}
-	return js_ast;
+	return [result_ast, analysis];
 }
 
 /**
@@ -208,7 +503,7 @@ function compileApp(options) {
  */
 function compileApp_wrapper(options) {
 	const compiled_ast = compileApp(options);
-	return print(compiled_ast).code;
+	return print(compiled_ast[0]).code;
 }
 
 export { compileApp_wrapper as compileApp };

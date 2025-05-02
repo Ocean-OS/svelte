@@ -131,6 +131,32 @@ export function call(callee, ...args) {
 }
 
 /**
+ * @param {ESTree.Identifier} id
+ * @param {ESTree.ClassBody} body
+ * @returns {ESTree.ClassDeclaration}
+ */
+export function class_declaration(id, body) {
+	return {
+		type: 'ClassDeclaration',
+		id,
+		body
+	};
+}
+
+/**
+ * @param {ESTree.ClassBody} body
+ * @param {ESTree.Identifier | null} [id]
+ * @returns {ESTree.ClassExpression}
+ */
+export function class_expression(body, id) {
+	return {
+		type: 'ClassExpression',
+		id,
+		body
+	};
+}
+
+/**
  * @param {string | ESTree.Expression} callee
  * @param {...ESTree.Expression} args
  * @returns {ESTree.ChainExpression}
@@ -253,6 +279,19 @@ export function id(name) {
  */
 export function private_id(name) {
 	return { type: 'PrivateIdentifier', name };
+}
+
+/**
+ * @param {ESTree.ImportDeclaration['specifiers']} specifiers
+ * @param {string | ESTree.Literal} source
+ * @returns {ESTree.ImportDeclaration}
+ */
+export function import_declaration(specifiers, source) {
+	return {
+		type: 'ImportDeclaration',
+		specifiers,
+		source: typeof source === 'string' ? literal(source) : source
+	};
 }
 
 /**
