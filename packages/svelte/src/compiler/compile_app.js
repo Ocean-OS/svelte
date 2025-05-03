@@ -221,23 +221,24 @@ function compileApp(
 				if (!imported_components.has(declaration)) {
 					imported_components.set(declaration, []);
 				}
-				const is_static = node.attributes.every(
-					(attr) =>
-						attr.type === 'Attribute' &&
-						(attr.value === true ||
-							(Array.isArray(attr.value) &&
-								attr.value.every(
-									(part) =>
-										part.type === 'Text' ||
-										(part.type === 'ExpressionTag' &&
-											context.state.scope.evaluate(part.expression).is_known)
-								)) ||
-							(!Array.isArray(attr.value) &&
-								attr.value.type === 'ExpressionTag' &&
-								context.state.scope.evaluate(
-									/** @type {AST.ExpressionTag} */ (attr.value).expression
-								).is_known))
-				);
+				const is_static =
+					node.attributes.every(
+						(attr) =>
+							attr.type === 'Attribute' &&
+							(attr.value === true ||
+								(Array.isArray(attr.value) &&
+									attr.value.every(
+										(part) =>
+											part.type === 'Text' ||
+											(part.type === 'ExpressionTag' &&
+												context.state.scope.evaluate(part.expression).is_known)
+									)) ||
+								(!Array.isArray(attr.value) &&
+									attr.value.type === 'ExpressionTag' &&
+									context.state.scope.evaluate(
+										/** @type {AST.ExpressionTag} */ (attr.value).expression
+									).is_known))
+					) && node.fragment.nodes.length === 0;
 				imported_components.get(declaration)?.push({
 					node,
 					static: is_static,
