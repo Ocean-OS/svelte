@@ -1,5 +1,5 @@
 /** @import { AppCompileOptions, AppCompileResult, Scope, ValidatedCompileOptions } from '#compiler' */
-/** @import { BaseModuleSpecifier, BlockStatement, CallExpression, Declaration, ExportAllDeclaration, ExportDefaultDeclaration, ExportNamedDeclaration, Identifier, ImportDeclaration, ImportSpecifier, Literal, Node, Pattern, Program, Property, Statement, VariableDeclaration } from 'estree' */
+/** @import { BaseModuleSpecifier, BlockStatement, CallExpression, Declaration, ExportAllDeclaration, ExportDefaultDeclaration, ExportNamedDeclaration, Expression, Identifier, ImportDeclaration, ImportSpecifier, Literal, Node, Pattern, Program, Property, Statement, VariableDeclaration } from 'estree' */
 import { parse } from 'path';
 import { readFileSync } from 'fs';
 /** @import { LegacyRoot } from './types/legacy-nodes.js' */
@@ -297,8 +297,10 @@ function compileApp(
 				is_same_importdeclaration(child, declaration)
 			);
 			if (found) {
-				//@ts-ignore
-				imported_components.set(child, imported_components.get(found.declaration));
+				imported_components.set(
+					child,
+					/** @type {ComponentEntry[]} */ (imported_components.get(found.declaration))
+				);
 				found.declaration = child;
 			}
 		}
@@ -406,6 +408,10 @@ function compileApp(
 		const destructuring_pattern = to_pattern(declaration.specifiers);
 		const top_level_imports = [];
 		const body = [];
+		/** @type {Pattern[]} */
+		const params = [];
+		/** @type {Expression[]} */
+		const args = [];
 		for (const child of /** @type {Program} */ (compiled).body) {
 			switch (child.type) {
 				case 'ExportAllDeclaration': {
@@ -512,7 +518,8 @@ function compileApp(
 					for (const specifier of child.specifiers) {
 						let name = scope.generate(`$$import_${specifier.local.name}`);
 						res.push({ ...specifier, local: b.id(name) });
-						body.push(b.var(specifier.local, b.id(name)));
+						params.push(specifier.local);
+						args.push(b.id(name));
 					}
 					top_level_imports.push(b.import_declaration(res, child.source));
 					break;
@@ -525,7 +532,7 @@ function compileApp(
 		current_analysis.inlined.imports.push(resolved);
 		result_body[result_body.indexOf(declaration)] = b.var(
 			destructuring_pattern,
-			b.arrow([], b.block(/** @type {BlockStatement['body']} */ (body)))
+			b.call(b.arrow(params, b.block(/** @type {BlockStatement['body']} */ (body))), ...args)
 		);
 		result_body.unshift(...top_level_imports);
 	}
