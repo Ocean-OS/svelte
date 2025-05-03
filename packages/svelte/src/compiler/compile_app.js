@@ -312,7 +312,6 @@ function compileApp(
 			}
 		}
 	}
-	const compiled_imports = [];
 	const result_body = [...js_ast.body];
 	/** @type {Program} */
 	let result_ast = {
@@ -399,8 +398,6 @@ function compileApp(
 			continue;
 		}
 		let needs_async = false;
-		/** @type {Array<ExportAllDeclaration|ExportNamedDeclaration|ExportDefaultDeclaration>} */
-		const exported = [];
 		const used_idents = new Set(); // since it'd be slower to create the scopes, we do this instead
 		zimmerframe_walk(/** @type {Node} */ (compiled), null, {
 			Identifier(node, context) {
@@ -415,15 +412,8 @@ function compileApp(
 			while (used_idents.has(`${exports_name}_${++counter}`));
 			used_idents.add((exports_name = `${exports_name}_${counter}`));
 		}
-		const export_replacements = new Map();
 		const destructuring_pattern = to_pattern(declaration.specifiers);
 		const top_level_imports = [];
-		/** @type {[ExportAllDeclaration['type'], ExportDefaultDeclaration['type'], ExportNamedDeclaration['type']]} */
-		const export_node_types = [
-			'ExportAllDeclaration',
-			'ExportDefaultDeclaration',
-			'ExportNamedDeclaration'
-		];
 		const body = [];
 		for (const child of /** @type {Program} */ (compiled).body) {
 			switch (child.type) {
