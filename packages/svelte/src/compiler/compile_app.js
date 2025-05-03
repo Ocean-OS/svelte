@@ -196,14 +196,11 @@ function compileApp(
 										(part.type === 'ExpressionTag' &&
 											context.state.scope.evaluate(part.expression).is_known)
 								)) ||
-							//@ts-expect-error
-							/** @type {AST.ExpressionTag} */ (
-								//@ts-expect-error
+							(!Array.isArray(attr.value) &&
 								attr.value.type === 'ExpressionTag' &&
-									context.state.scope.evaluate(
-										/** @type {AST.ExpressionTag} */ (attr.value).expression
-									).is_known
-							))
+								context.state.scope.evaluate(
+									/** @type {AST.ExpressionTag} */ (attr.value).expression
+								).is_known))
 				);
 				imported_components.get(declaration)?.push({
 					node,
@@ -216,13 +213,7 @@ function compileApp(
 			const scope = /** @type {Scope} */ (
 				analysis.instance.scopes.get(node) ?? analysis.module.scopes.get(node)
 			);
-			context.next(
-				scope != null
-					? {
-							scope
-						}
-					: context.state
-			);
+			context.next({ scope: scope ?? context.state.scope });
 		}
 	});
 	/** @param {string} resolved */
