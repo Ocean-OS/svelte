@@ -57,17 +57,6 @@ function to_pattern(specifiers) {
 }
 
 /**
- * @param {ImportDeclaration['specifiers']} specifiers
- */
-function extract_import_identifiers(specifiers) {
-	const identifiers = [];
-	for (const specifier of specifiers) {
-		identifiers.push(specifier.local);
-	}
-	return identifiers;
-}
-
-/**
  * Only returns true if the passed component is static, excluding props.
  * Only regular elements, text, components, and expressions are allowed. No blocks or snippets, etc.
  * @param {import('./phases/types.js').ComponentAnalysis} analysis
@@ -139,35 +128,6 @@ function is_static_component(analysis) {
 		}
 	}
 	return true;
-}
-
-/**
- * @param {AST.Attribute[]} attributes
- * @param {Scope} scope
- * @returns {Record<string, Node>}
- */
-function attributes_to_object(attributes, scope) {
-	const res = Object.create(null);
-	for (const attribute of attributes) {
-		const key = attribute.name;
-		if (attribute.value === true) {
-			res[key] = b.literal(true);
-			continue;
-		} else if (Array.isArray(attribute.value)) {
-			const { value } = build_template_chunk(
-				attribute.value,
-				(node) => node,
-				/** @type {import('./phases/3-transform/client/types.js').ComponentClientTransformState} */ ({
-					scope
-				}),
-				(value) => value
-			);
-			res[key] = value;
-		} else {
-			res[key] = attribute.value;
-		}
-	}
-	return res;
 }
 
 /**
@@ -412,7 +372,7 @@ function compileApp(
 			) {
 				/** @type {VariableDeclaration} */
 				const template_declaration = /** @type {VariableDeclaration} */ (
-					client_component(import_analysis, validated).body.find(
+					compiled.body.find(
 						(node) =>
 							node.type === 'VariableDeclaration' &&
 							node.declarations.length === 1 &&
@@ -454,7 +414,7 @@ function compileApp(
 				} else {
 					result_ast = /** @type {Program} */ (
 						zimmerframe_walk(/** @type {Node} */ (result_ast), null, {
-							ExpressionStatement(stmt, context) {
+							ExpressionStatement(stmt) {
 								const { expression: node } = stmt;
 								if (
 									node.type === 'CallExpression' &&
@@ -480,7 +440,7 @@ function compileApp(
 				)?.declaration;
 				result_ast = /** @type {Program} */ (
 					zimmerframe_walk(/** @type {Node} */ (result_ast), null, {
-						CallExpression(node, context) {
+						CallExpression(node) {
 							if (
 								node.type === 'CallExpression' &&
 								node.callee.type === 'Identifier' &&
