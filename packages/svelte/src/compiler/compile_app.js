@@ -1,4 +1,4 @@
-/** @import { AppCompileOptions, Scope, ValidatedCompileOptions } from '#compiler' */
+/** @import { AppCompileOptions, AppCompileResult, Scope, ValidatedCompileOptions } from '#compiler' */
 /** @import { BaseModuleSpecifier, BlockStatement, CallExpression, Declaration, ExportAllDeclaration, ExportDefaultDeclaration, ExportNamedDeclaration, Identifier, ImportDeclaration, ImportSpecifier, Literal, Node, Pattern, Program, Property, Statement, VariableDeclaration } from 'estree' */
 import { parse } from 'path';
 import { readFileSync } from 'fs';
@@ -107,9 +107,21 @@ function attributes_to_object(attributes, scope) {
 /**
  * @param {string} filename
  * @param {AppCompileOptions} options
- * @returns {[Program, import('./phases/types.js').ComponentAnalysis]}
+ * @param {AppCompileResult} [current_analysis]
+ * @returns {[Program, import('./phases/types.js').ComponentAnalysis, AppCompileResult]}
  */
-function compileApp(filename, options = {}) {
+function compileApp(
+	filename,
+	options = {},
+	current_analysis = {
+		inlined: {
+			imports: [],
+			components: []
+		},
+		warnings: [],
+		js: /** @type {AppCompileResult['js']} */ (/** @type {unknown} */ (null)) // this is assigned later
+	}
+) {
 	const {
 		entry = parse(filename).dir,
 		depth = 1,
@@ -143,7 +155,13 @@ function compileApp(filename, options = {}) {
 
 	const analysis = analyze_component(parsed, source, combined_options);
 	const result = transform_component(analysis, source, combined_options);
-	if (depth < 1) return [parse_acorn(result.js.code, false, false), analysis];
+	current_analysis.warnings.push(
+		...result.warnings.map((warning) => ({
+			filename,
+			...warning
+		}))
+	);
+	if (depth < 1) return [parse_acorn(result.js.code, false, false), analysis, current_analysis];
 	/**
 	 * @typedef {object} ComponentEntry
 	 * @property {AST.Component} node
@@ -294,7 +312,6 @@ function compileApp(filename, options = {}) {
 			}
 		}
 	}
-	// const js_ast = parsed.instance?.content ?? {type: 'Program', body: []};
 	const compiled_imports = [];
 	const result_body = [...js_ast.body];
 	/** @type {Program} */
@@ -304,11 +321,14 @@ function compileApp(filename, options = {}) {
 		sourceType: 'module'
 	};
 	for (const { resolved, declaration, components = [] } of imports) {
-		// const source = readFileSync(resolved, 'utf-8');
-		const [compiled, import_analysis] = compileApp(resolved, {
-			...options,
-			depth: depth - 1
-		});
+		const [compiled, import_analysis] = compileApp(
+			resolved,
+			{
+				...options,
+				depth: depth - 1
+			},
+			current_analysis
+		);
 		if (
 			import_analysis.template.ast.metadata.dynamic === false &&
 			import_analysis.instance.ast.body.length === 0 &&
@@ -335,6 +355,7 @@ function compileApp(filename, options = {}) {
 				)
 			);
 			const component_callee = declaration.specifiers[0].local.name;
+			current_analysis.inlined.components.push(resolved);
 			if (template_declaration) {
 				const template_id = scope.generate('$$imported_root');
 				result_body[result_body.indexOf(declaration)] = b.var(
@@ -520,22 +541,26 @@ function compileApp(filename, options = {}) {
 			}
 		}
 		body.push(b.return(b.id(exports_name)));
+		current_analysis.inlined.imports.push(resolved);
 		result_body[result_body.indexOf(declaration)] = b.var(
 			destructuring_pattern,
 			b.arrow([], b.block(/** @type {BlockStatement['body']} */ (body)))
 		);
 		result_body.unshift(...top_level_imports);
 	}
-	return [result_ast, analysis];
+	return [result_ast, analysis, current_analysis];
 }
 
 /**
  * @param {string} filename
  * @param {AppCompileOptions} [options]
+ * @returns {AppCompileResult}
  */
 function compileApp_wrapper(filename, options) {
 	const compiled_ast = compileApp(filename, options);
-	return print(compiled_ast[0]).code;
+	const result = compiled_ast[2];
+	result.js = print(compiled_ast[0]);
+	return result;
 }
 
 export { compileApp_wrapper as compileApp };

@@ -42,6 +42,27 @@ export interface CompileResult {
 	ast: any;
 }
 
+export interface AppCompileResult {
+	inlined: {
+		/** Component imports that were converted into IIFEs */
+		imports: string[];
+		/** Imported components that were inlined into the component function */
+		components: string[];
+	};
+	warnings: ComponentWarning[];
+	js: {
+		code: string;
+		map: SourceMap;
+	};
+}
+
+export interface ComponentWarning extends Warning {
+	/**
+	 * The component file that caused the warning
+	 */
+	filename: string;
+}
+
 export interface Warning extends ICompileDiagnostic {}
 
 export interface CompileError extends ICompileDiagnostic {}
@@ -59,7 +80,7 @@ export interface OptimizeOptions {
 
 export interface AppCompileOptions extends ModuleCompileOptions {
 	/**
-	 * The directory to use as a base for the app. In most cases, this is the directory where your main component resides. 
+	 * The directory to use as a base for the app. In most cases, this is the directory where your main component resides.
 	 */
 	entry?: string;
 	/**
