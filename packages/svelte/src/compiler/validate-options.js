@@ -150,8 +150,7 @@ export const validate_compileapp_options =
 		object({
 			...component_options,
 			depth: number(1),
-			entry: string('.'),
-			filename: string('')
+			entry: string('.')
 		})
 	);
 export const validate_component_options =

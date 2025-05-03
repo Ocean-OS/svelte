@@ -23,6 +23,7 @@ import is_reference from 'is-reference';
 import * as b from './utils/builders.js';
 import { extract_identifiers } from './utils/ast.js';
 import { client_component } from './phases/3-transform/client/transform-client.js';
+import { build_template_chunk } from './phases/3-transform/client/visitors/shared/utils.js';
 export { default as preprocess } from './preprocess/index.js';
 
 /**
@@ -66,19 +67,50 @@ function extract_import_identifiers(specifiers) {
 }
 
 /**
+ * @param {AST.Attribute[]} attributes
+ * @param {Scope} scope
+ * @returns {Record<string, Node>}
+ */
+function attributes_to_object(attributes, scope) {
+	const res = Object.create(null);
+	for (const attribute of attributes) {
+		const key = attribute.name;
+		if (attribute.value === true) {
+			res[key] = b.literal(true);
+			continue;
+		} else if (Array.isArray(attribute.value)) {
+			const { value } = build_template_chunk(
+				attribute.value,
+				(node) => node,
+				/** @type {import('./phases/3-transform/client/types.js').ComponentClientTransformState} */ ({
+					scope
+				}),
+				(value) => value
+			);
+			res[key] = value;
+		} else {
+			res[key] = attribute.value;
+		}
+	}
+	return res;
+}
+
+/**
  * Here's my current thought process for this:
  * 1. We should only assume that imports whose resolved path ends with `.svelte` are actually components
  * 2. We should only use static components for optimization
- * Here's a few ideas for how this can be implemented.
+ * Here's a few ideas/notes for how this can be implemented.
+ * - Take component imports, and if they are truly static (only consisting of a template and a `$.append` call), inline them
+ * - Take component imports, and if they take props but are otherwise static, and all references to them have static props, inline them
  */
 
 /**
+ * @param {string} filename
  * @param {AppCompileOptions} options
  * @returns {[Program, import('./phases/types.js').ComponentAnalysis]}
  */
-function compileApp(options) {
+function compileApp(filename, options = {}) {
 	const {
-		filename,
 		entry = parse(filename).dir,
 		depth = 1,
 		...component_options
@@ -125,9 +157,11 @@ function compileApp(options) {
 	};
 	zimmerframe_walk(/** @type {AST.SvelteNode} */ (parsed.fragment), walk_state, {
 		Component(node, context) {
-			const binding = context.state.scope.get(
-				node.name.includes('.') ? node.name.slice(0, node.name.indexOf('.')) : node.name
-			);
+			if (node.name.includes('.')) {
+				context.next();
+				return;
+			}
+			const binding = context.state.scope.get(node.name);
 			if (binding?.kind === 'normal' && binding.declaration_kind === 'import') {
 				const declaration = /** @type {ImportDeclaration} */ (binding.initial);
 				if (!imported_components.has(declaration)) {
@@ -177,13 +211,20 @@ function compileApp(options) {
 	function normalize_resolved(resolved) {
 		return resolved.replace(/^file\:\/{3}/, '');
 	}
+	/**
+	 * @param {string} specifier
+	 * @param {string | URL | undefined} [parent]
+	 */
+	function resolve(specifier, parent) {
+		return normalize_resolved(import.meta.resolve(specifier, parent));
+	}
 	/** @type {Array<{source: string, resolved: string, declaration: ImportDeclaration, components: ComponentEntry[] | undefined }>} */
 	const imports = [];
 	const existing_imports = [];
 	for (const child of parsed.instance?.content.body ?? []) {
 		if (child.type === 'ImportDeclaration' && imported_components.has(child)) {
 			const source = /** @type {string} */ (child.source.value);
-			const resolved = normalize_resolved(import.meta.resolve(source, entry));
+			const resolved = resolve(source, entry);
 			if (resolved.match(/\.svelte$/)) {
 				imports.push({
 					source,
@@ -202,8 +243,8 @@ function compileApp(options) {
 	 */
 	function is_same_importdeclaration(a, b) {
 		if (
-			import.meta.resolve(/** @type {string} */ (a.source.value)) !==
-			import.meta.resolve(/** @type {string} */ (b.source.value))
+			resolve(/** @type {string} */ (a.source.value)) !==
+			resolve(/** @type {string} */ (b.source.value))
 		) {
 			return false;
 		}
@@ -264,9 +305,8 @@ function compileApp(options) {
 	};
 	for (const { resolved, declaration, components = [] } of imports) {
 		// const source = readFileSync(resolved, 'utf-8');
-		const [compiled, import_analysis] = compileApp({
+		const [compiled, import_analysis] = compileApp(resolved, {
 			...options,
-			filename: resolved,
 			depth: depth - 1
 		});
 		if (
@@ -369,12 +409,7 @@ function compileApp(options) {
 				case 'ExportAllDeclaration': {
 					const local = scope.generate(`$$import`);
 					top_level_imports.push(
-						b.import_all(
-							local,
-							normalize_resolved(
-								import.meta.resolve(/** @type {string} */ (child.source.value), resolved)
-							)
-						)
+						b.import_all(local, resolve(/** @type {string} */ (child.source.value), resolved))
 					);
 					if (child.exported === null) {
 						body.push(
@@ -464,9 +499,6 @@ function compileApp(options) {
 					break;
 				}
 				case 'ImportDeclaration': {
-					// const identifiers = extract_import_identifiers(child.specifiers);
-					// const res = [];
-					// const replacements = new Map();
 					if (
 						result_body.find(
 							(node) => node.type === 'ImportDeclaration' && is_same_importdeclaration(child, node)
@@ -477,7 +509,6 @@ function compileApp(options) {
 					const res = [];
 					for (const specifier of child.specifiers) {
 						let name = scope.generate(`$$import_${specifier.local.name}`);
-						// replacements.set(specifier.local.name, name);
 						res.push({ ...specifier, local: b.id(name) });
 						body.push(b.var(specifier.local, b.id(name)));
 					}
@@ -499,10 +530,11 @@ function compileApp(options) {
 }
 
 /**
- * @param {AppCompileOptions} options
+ * @param {string} filename
+ * @param {AppCompileOptions} [options]
  */
-function compileApp_wrapper(options) {
-	const compiled_ast = compileApp(options);
+function compileApp_wrapper(filename, options) {
+	const compiled_ast = compileApp(filename, options);
 	return print(compiled_ast[0]).code;
 }
 

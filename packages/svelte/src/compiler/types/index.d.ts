@@ -62,7 +62,6 @@ export interface AppCompileOptions extends ModuleCompileOptions {
 	 * The directory to use as a base for the app. In most cases, this is the directory where your main component resides. 
 	 */
 	entry?: string;
-	filename: string;
 	/**
 	 * How deep to recurse into imports. For example, if `A.svelte` imports `B.svelte`, which imports `C.svelte`, a depth of 3 would be able to access `C.svelte`.
 	 */
