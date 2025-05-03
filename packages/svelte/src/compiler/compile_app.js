@@ -365,28 +365,28 @@ function compileApp(
 			declaration.specifiers[0].type === 'ImportDefaultSpecifier' &&
 			import_analysis.module.ast.body.length === 0
 		) {
+			/** @type {VariableDeclaration} */
+			const template_declaration = /** @type {VariableDeclaration} */ (
+				compiled.body.find(
+					(node) =>
+						node.type === 'VariableDeclaration' &&
+						node.declarations.length === 1 &&
+						node.declarations[0]?.init?.type === 'CallExpression' &&
+						((node.declarations[0].init.callee.type === 'MemberExpression' &&
+							node.declarations[0].init.callee.object.type === 'Identifier' &&
+							node.declarations[0].init.callee.object.name === '$' &&
+							node.declarations[0].init.callee.property.type === 'Identifier' &&
+							node.declarations[0].init.callee.property.name === 'template') ||
+							(node.declarations[0].init.callee.type === 'Identifier' &&
+								node.declarations[0].init.callee.name === '$.template'))
+				)
+			);
 			if (
 				import_analysis.template.ast.metadata.dynamic === false &&
 				import_analysis.instance.ast.body.length === 0 &&
 				imported_components.get(declaration) &&
 				imported_components.get(declaration)?.every(({ node }) => node.attributes.length === 0)
 			) {
-				/** @type {VariableDeclaration} */
-				const template_declaration = /** @type {VariableDeclaration} */ (
-					compiled.body.find(
-						(node) =>
-							node.type === 'VariableDeclaration' &&
-							node.declarations.length === 1 &&
-							node.declarations[0]?.init?.type === 'CallExpression' &&
-							((node.declarations[0].init.callee.type === 'MemberExpression' &&
-								node.declarations[0].init.callee.object.type === 'Identifier' &&
-								node.declarations[0].init.callee.object.name === '$' &&
-								node.declarations[0].init.callee.property.type === 'Identifier' &&
-								node.declarations[0].init.callee.property.name === 'template') ||
-								(node.declarations[0].init.callee.type === 'Identifier' &&
-									node.declarations[0].init.callee.name === '$.template'))
-					)
-				);
 				const component_callee = declaration.specifiers[0].local.name;
 				current_analysis.inlined.components.push(resolved);
 				if (template_declaration) {
@@ -439,6 +439,12 @@ function compileApp(
 							node.declaration?.type === 'FunctionDeclaration'
 					)
 				)?.declaration;
+				const template_id = scope.generate(`$$import_root`);
+				result_body[result_body.indexOf(declaration)] = b.var(
+					template_id,
+					/** @type {CallExpression} */ (template_declaration.declarations[0].init)
+				);
+				// TODO remove template effects and stuff because there isn't any reactivity in the component
 				result_ast = /** @type {Program} */ (
 					zimmerframe_walk(/** @type {Node} */ (result_ast), null, {
 						CallExpression(node) {
@@ -486,10 +492,13 @@ function compileApp(
 										},
 										Identifier(node, context) {
 											if (
-												is_reference(node, /** @type {Node} */ (context.path.at(-1))) &&
-												node.name === '$$anchor'
+												is_reference(node, /** @type {Node} */ (context.path.at(-1)))
 											) {
-												return anchor;
+												if (node.name === '$$anchor') {
+													return anchor;
+												} else if (node.name === /** @type {Identifier} */ (template_declaration.declarations[0].id).name) {
+													return b.id(template_id);
+												}
 											}
 										}
 									}
