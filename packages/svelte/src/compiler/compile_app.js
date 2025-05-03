@@ -1,5 +1,5 @@
 /** @import { AppCompileOptions, AppCompileResult, Scope, ValidatedCompileOptions } from '#compiler' */
-/** @import { BaseModuleSpecifier, BlockStatement, CallExpression, Declaration, ExportAllDeclaration, ExportDefaultDeclaration, ExportNamedDeclaration, Expression, Identifier, ImportDeclaration, ImportSpecifier, Literal, Node, Pattern, Program, Property, Statement, VariableDeclaration } from 'estree' */
+/** @import { BaseModuleSpecifier, BlockStatement, CallExpression, Declaration, ExportAllDeclaration, ExportDefaultDeclaration, ExportNamedDeclaration, Expression, FunctionDeclaration, Identifier, ImportDeclaration, ImportSpecifier, Literal, Node, ObjectExpression, Pattern, Program, Property, Statement, VariableDeclaration } from 'estree' */
 import { parse } from 'path';
 import { readFileSync } from 'fs';
 /** @import { LegacyRoot } from './types/legacy-nodes.js' */
@@ -24,6 +24,7 @@ import * as b from './utils/builders.js';
 import { extract_identifiers } from './utils/ast.js';
 import { client_component } from './phases/3-transform/client/transform-client.js';
 import { build_template_chunk } from './phases/3-transform/client/visitors/shared/utils.js';
+import { get_rune } from './phases/scope.js';
 export { default as preprocess } from './preprocess/index.js';
 
 /**
@@ -64,6 +65,80 @@ function extract_import_identifiers(specifiers) {
 		identifiers.push(specifier.local);
 	}
 	return identifiers;
+}
+
+/**
+ * Only returns true if the passed component is static, excluding props.
+ * Only regular elements, text, components, and expressions are allowed. No blocks or snippets, etc.
+ * @param {import('./phases/types.js').ComponentAnalysis} analysis
+ */
+function is_static_component(analysis) {
+	if (
+		!(
+			analysis.instance.ast.body.length === 1 &&
+			analysis.instance.ast.body[0].type === 'VariableDeclaration' &&
+			analysis.instance.ast.body[0].declarations.length === 1 &&
+			analysis.instance.ast.body[0].declarations[0].init &&
+			get_rune(analysis.instance.ast.body[0].declarations[0].init, analysis.instance.scope) ===
+				'$props' &&
+			analysis.instance.ast.body[0].declarations[0].id.type === 'ObjectPattern' &&
+			analysis.instance.ast.body[0].declarations[0].id.properties.every(
+				(property) =>
+					property.type === 'Property' &&
+					property.value.type === 'Identifier' &&
+					!analysis.instance.scope.get(property.value.name)?.updated
+			) &&
+			analysis.template.ast.nodes.every((node) =>
+				/** @type {AST.Fragment['nodes'][number]['type'][]} */ ([
+					'Comment',
+					'Component',
+					'ExpressionTag',
+					'HtmlTag',
+					'RegularElement',
+					'Text'
+				]).includes(node.type)
+			)
+		)
+	)
+		return false;
+	if (analysis.template.ast.nodes.some((node) => node.type === 'RegularElement')) {
+		for (const node of analysis.template.ast.nodes) {
+			if (node.type !== 'RegularElement' && node.type !== 'Component') continue;
+
+			let is_static = true;
+			/**
+			 * @param {AST.SvelteNode} _
+			 * @param {import('zimmerframe').Context<AST.SvelteNode, null>} context
+			 */
+			const stop = (_, context) => {
+				is_static = false;
+				context.stop();
+			};
+			zimmerframe_walk(/** @type {AST.SvelteNode} */ (node.fragment), null, {
+				IfBlock: stop,
+				EachBlock: stop,
+				SnippetBlock: stop,
+				SlotElement: stop,
+				KeyBlock: stop,
+				AwaitBlock: stop,
+				SvelteBody: stop,
+				SvelteBoundary: stop,
+				SvelteComponent: stop,
+				SvelteDocument: stop,
+				SvelteElement: stop,
+				SvelteFragment: stop,
+				SvelteHead: stop,
+				SvelteOptions: stop,
+				SvelteSelf: stop,
+				SvelteWindow: stop,
+				RenderTag: stop
+			});
+			if (!is_static) {
+				return false;
+			}
+		}
+	}
+	return true;
 }
 
 /**
@@ -166,6 +241,7 @@ function compileApp(
 	 * @typedef {object} ComponentEntry
 	 * @property {AST.Component} node
 	 * @property {boolean} static
+	 * @property {Scope} scope
 	 */
 	/** @type {Map<ImportDeclaration, ComponentEntry[]>} */
 	const imported_components = new Map();
@@ -204,7 +280,8 @@ function compileApp(
 				);
 				imported_components.get(declaration)?.push({
 					node,
-					static: is_static
+					static: is_static,
+					scope: context.state.scope
 				});
 			}
 			context.next();
@@ -322,89 +399,149 @@ function compileApp(
 			current_analysis
 		);
 		if (
-			import_analysis.template.ast.metadata.dynamic === false &&
-			import_analysis.instance.ast.body.length === 0 &&
 			components.every(({ static: is_static }) => is_static) &&
 			declaration.specifiers.length === 1 &&
 			declaration.specifiers[0].type === 'ImportDefaultSpecifier' &&
-			imported_components.get(declaration) &&
-			imported_components.get(declaration)?.every(({ node }) => node.attributes.length === 0)
+			import_analysis.module.ast.body.length === 0
 		) {
-			/** @type {VariableDeclaration} */
-			const template_declaration = /** @type {VariableDeclaration} */ (
-				client_component(import_analysis, validated).body.find(
-					(node) =>
-						node.type === 'VariableDeclaration' &&
-						node.declarations.length === 1 &&
-						node.declarations[0]?.init?.type === 'CallExpression' &&
-						((node.declarations[0].init.callee.type === 'MemberExpression' &&
-							node.declarations[0].init.callee.object.type === 'Identifier' &&
-							node.declarations[0].init.callee.object.name === '$' &&
-							node.declarations[0].init.callee.property.type === 'Identifier' &&
-							node.declarations[0].init.callee.property.name === 'template') ||
-							(node.declarations[0].init.callee.type === 'Identifier' &&
-								node.declarations[0].init.callee.name === '$.template'))
-				)
-			);
-			const component_callee = declaration.specifiers[0].local.name;
-			current_analysis.inlined.components.push(resolved);
-			if (template_declaration) {
-				const template_id = scope.generate('$$imported_root');
-				result_body[result_body.indexOf(declaration)] = b.var(
-					template_id,
-					/** @type {CallExpression} */ (template_declaration.declarations[0].init)
+			if (
+				import_analysis.template.ast.metadata.dynamic === false &&
+				import_analysis.instance.ast.body.length === 0 &&
+				imported_components.get(declaration) &&
+				imported_components.get(declaration)?.every(({ node }) => node.attributes.length === 0)
+			) {
+				/** @type {VariableDeclaration} */
+				const template_declaration = /** @type {VariableDeclaration} */ (
+					client_component(import_analysis, validated).body.find(
+						(node) =>
+							node.type === 'VariableDeclaration' &&
+							node.declarations.length === 1 &&
+							node.declarations[0]?.init?.type === 'CallExpression' &&
+							((node.declarations[0].init.callee.type === 'MemberExpression' &&
+								node.declarations[0].init.callee.object.type === 'Identifier' &&
+								node.declarations[0].init.callee.object.name === '$' &&
+								node.declarations[0].init.callee.property.type === 'Identifier' &&
+								node.declarations[0].init.callee.property.name === 'template') ||
+								(node.declarations[0].init.callee.type === 'Identifier' &&
+									node.declarations[0].init.callee.name === '$.template'))
+					)
 				);
+				const component_callee = declaration.specifiers[0].local.name;
+				current_analysis.inlined.components.push(resolved);
+				if (template_declaration) {
+					const template_id = scope.generate('$$imported_root');
+					result_body[result_body.indexOf(declaration)] = b.var(
+						template_id,
+						/** @type {CallExpression} */ (template_declaration.declarations[0].init)
+					);
+					result_ast = /** @type {Program} */ (
+						zimmerframe_walk(/** @type {Node} */ (result_ast), null, {
+							CallExpression(node, context) {
+								if (
+									node.callee.type === 'Identifier' &&
+									node.callee.name === component_callee &&
+									context.path.at(-1)?.type === 'ExpressionStatement' &&
+									node.arguments.length === 2 &&
+									node.arguments[1]?.type === 'ObjectExpression' &&
+									node.arguments[1].properties.length === 0
+								) {
+									return b.call(`$.append`, b.call(template_id), node.arguments[0]);
+								}
+								context.next();
+							}
+						})
+					);
+				} else {
+					result_ast = /** @type {Program} */ (
+						zimmerframe_walk(/** @type {Node} */ (result_ast), null, {
+							ExpressionStatement(stmt, context) {
+								const { expression: node } = stmt;
+								if (
+									node.type === 'CallExpression' &&
+									node.callee.type === 'Identifier' &&
+									node.callee.name === component_callee &&
+									node.arguments.length === 1
+								) {
+									return b.empty;
+								}
+							}
+						})
+					);
+				}
+				continue;
+			} else if (is_static_component(import_analysis)) {
+				const component_callee = declaration.specifiers[0].local.name;
+				const component_instance = /** @type {ExportDefaultDeclaration} */ (
+					compiled.body.find(
+						(node) =>
+							node.type === 'ExportDefaultDeclaration' &&
+							node.declaration?.type === 'FunctionDeclaration'
+					)
+				)?.declaration;
 				result_ast = /** @type {Program} */ (
 					zimmerframe_walk(/** @type {Node} */ (result_ast), null, {
 						CallExpression(node, context) {
 							if (
-								node.callee.type === 'Identifier' &&
-								node.callee.name === component_callee &&
-								context.path.at(-1)?.type === 'ExpressionStatement' &&
-								node.arguments.length === 2 &&
-								node.arguments[1]?.type === 'ObjectExpression' &&
-								node.arguments[1].properties.length === 0
-							) {
-								return b.call(`$.append`, b.call(template_id), node.arguments[0]);
-							}
-							context.next();
-						}
-					})
-				);
-			} else {
-				result_ast = /** @type {Program} */ (
-					zimmerframe_walk(/** @type {Node} */ (result_ast), null, {
-						ExpressionStatement(stmt, context) {
-							const { expression: node } = stmt;
-							if (
 								node.type === 'CallExpression' &&
 								node.callee.type === 'Identifier' &&
-								node.callee.name === component_callee &&
-								node.arguments.length === 1
+								node.callee.name === component_callee
 							) {
-								return b.empty;
+								const $$props = Object.create(null);
+								const props =
+									/** @type {ObjectExpression & {properties: (Property & {computed: false})[]}} */ (
+										node.arguments[1]
+									);
+								for (const property of props.properties) {
+									/** @type {string} */
+									const key = /** @type {string} */ (
+										property.key.type === 'Literal'
+											? property.key.value
+											: /** @type {Identifier} */ (property.key).name
+									);
+									if (property.kind === 'init') {
+										$$props[key] = property.value;
+									}
+								}
+								const anchor = node.arguments[0];
+								const transformed_component_instance = zimmerframe_walk(
+									/** @type {Node} */ (
+										/** @type {FunctionDeclaration} */ (component_instance).body
+									),
+									null,
+									{
+										MemberExpression(node, context) {
+											if (
+												node.object.type === 'Identifier' &&
+												node.object.name === '$$props' &&
+												node.property.type === 'Identifier'
+											) {
+												const key = node.property.name;
+												if (key in $$props) {
+													return $$props[key];
+												}
+												return b.void0;
+											}
+											context.next();
+										},
+										Identifier(node, context) {
+											if (
+												is_reference(node, /** @type {Node} */ (context.path.at(-1))) &&
+												node.name === '$$anchor'
+											) {
+												return anchor;
+											}
+										}
+									}
+								);
+								return transformed_component_instance;
 							}
 						}
 					})
 				);
 			}
-			continue;
 		}
 		let needs_async = false;
-		const used_idents = new Set(); // since it'd be slower to create the scopes, we do this instead
-		zimmerframe_walk(/** @type {Node} */ (compiled), null, {
-			Identifier(node, context) {
-				if (is_reference(node, /** @type {Node} */ (context.path.at(-1)))) {
-					used_idents.add(node.name);
-				}
-			}
-		});
-		let exports_name = '$$exports';
-		if (used_idents.has(exports_name)) {
-			let counter = 0;
-			while (used_idents.has(`${exports_name}_${++counter}`));
-			used_idents.add((exports_name = `${exports_name}_${counter}`));
-		}
+		let exports_name = import_analysis.instance.scope.generate('$$exports');
 		const destructuring_pattern = to_pattern(declaration.specifiers);
 		const top_level_imports = [];
 		const body = [];

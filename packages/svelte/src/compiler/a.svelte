@@ -1,4 +1,4 @@
 <script>
     import B from './b.svelte';
 </script>
-<B />
+<B name='world' />

@@ -161,7 +161,9 @@ function compileApp_browser() {
 
 export { VERSION } from '../version.js';
 export { migrate } from './migrate/index.js';
-export const compileApp =
+/** @type {import('./compile_app.js').compileApp} */
+export const compileApp = /** @type {import('./compile_app.js').compileApp} */ (
 	typeof globalThis.process === 'object' && process?.version
 		? (await import('./compile_app.js')).compileApp
-		: compileApp_browser;
+		: compileApp_browser
+);
